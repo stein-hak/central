@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: xui-central-db
+    environment:
+      POSTGRES_DB: xui_central
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - xui-network
+    restart: unless-stopped
+
+  # Admin Service
+  admin:
+    build: ./admin
+    container_name: xui-central-admin
+    environment:
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/xui_central
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      SUBSCRIPTION_URL: ${SUBSCRIPTION_URL:-http://localhost:8001}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    networks:
+      - xui-network
+    restart: unless-stopped
+    volumes:
+      - ./admin:/app
+
+  # Subscription Service (Public Read-Only)
+  subscription:
+    build: ./subscription
+    container_name: xui-central-subscription
+    environment:
+      DATABASE_URL_READONLY: postgresql://sub_readonly:sub_readonly_password@postgres:5432/xui_central
+    ports:
+      - "8001:8001"
+    depends_on:
+      - postgres
+    networks:
+      - xui-network
+    restart: unless-stopped
+    volumes:
+      - ./subscription:/app
+
+volumes:
+  postgres_data:
+
+networks:
+  xui-network:
+    driver: bridge
