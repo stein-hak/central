@@ -656,17 +656,48 @@ async def test_node(request: Request, node_id: int, db: Session = Depends(get_db
 
 @app.delete("/api/nodes/{node_id}")
 async def delete_node(request: Request, node_id: int, db: Session = Depends(get_db)):
-    """Delete node"""
+    """Delete node, remove all clients from it, and clean up database"""
     check_auth(request)
 
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
+    # Get all clients that have keys on this node
+    keys = db.query(Key).filter(Key.node_id == node_id).all()
+    clients_on_node = {}  # {client_id: client}
+    for key in keys:
+        if key.client_id not in clients_on_node:
+            client = db.query(Client).filter(Client.id == key.client_id).first()
+            if client:
+                clients_on_node[key.client_id] = client
+
+    # Delete all clients from the actual 3x-ui node
+    clients_deleted_on_node = 0
+    for client in clients_on_node.values():
+        try:
+            success, msg = delete_client_from_node(node, client, db)
+            if success:
+                clients_deleted_on_node += 1
+        except Exception:
+            # Continue even if deletion fails (node might be offline)
+            pass
+
+    # Delete all keys associated with this node from database
+    keys_deleted = db.query(Key).filter(Key.node_id == node_id).delete()
+
+    # Clear stats cache for this node
+    clear_node_stats_cache(node_id)
+
+    # Delete the node itself
     db.delete(node)
     db.commit()
 
-    return {"message": "Node deleted"}
+    return {
+        "message": "Node deleted",
+        "keys_removed": keys_deleted,
+        "clients_deleted_on_node": clients_deleted_on_node
+    }
 
 
 # ============================================================================

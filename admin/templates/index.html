@@ -712,9 +712,16 @@
         async function deleteNode(id) {
             if (!confirm(translations[currentLang].confirm_delete_node)) return;
 
-            await fetch(`/api/nodes/${id}`, {
+            const response = await fetch(`/api/nodes/${id}`, {
                 method: 'DELETE'
             });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(`Node deleted!\n` +
+                    `Deleted ${data.clients_deleted_on_node} clients from node\n` +
+                    `Removed ${data.keys_removed} VLESS keys from subscriptions`);
+            }
 
             loadNodes();
         }
