@@ -313,6 +313,7 @@
                             <th data-i18n="th_url">API URL</th>
                             <th data-i18n="th_domain">Domain</th>
                             <th data-i18n="th_clients">Clients</th>
+                            <th data-i18n="th_traffic">Traffic</th>
                             <th data-i18n="th_status">Status</th>
                             <th data-i18n="th_actions">Actions</th>
                         </tr>
@@ -420,6 +421,7 @@
                 th_url: 'API URL',
                 th_domain: 'Domain',
                 th_clients: 'Clients',
+                th_traffic: 'Traffic',
                 th_status: 'Status',
                 th_actions: 'Actions',
                 add_client: 'Add New Client',
@@ -464,6 +466,7 @@
                 th_url: 'API URL',
                 th_domain: 'Домен',
                 th_clients: 'Клиенты',
+                th_traffic: 'Трафик',
                 th_status: 'Статус',
                 th_actions: 'Действия',
                 add_client: 'Добавить нового клиента',
@@ -560,6 +563,7 @@
                     <td>${node.url}</td>
                     <td>${node.domain}</td>
                     <td id="stats-${node.id}">...</td>
+                    <td id="traffic-${node.id}">...</td>
                     <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span></td>
                     <td>
                         <button class="btn btn-success" onclick="testNode(${node.id})">${translations[currentLang].btn_test}</button>
@@ -574,20 +578,44 @@
             }
         }
 
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
         async function fetchNodeStats(nodeId) {
             try {
                 const response = await fetch(`/api/nodes/${nodeId}/stats`);
                 const stats = await response.json();
 
                 const statsCell = document.getElementById(`stats-${nodeId}`);
+                const trafficCell = document.getElementById(`traffic-${nodeId}`);
+
                 if (stats.online) {
-                    statsCell.innerHTML = `<span style="color: #27ae60;">${stats.active_clients}/${stats.total_clients}</span>`;
+                    // Show: online/total (enabled)
+                    statsCell.innerHTML = `<span style="color: #27ae60;">${stats.online_clients}/${stats.total_clients}</span> <span style="color: #999; font-size: 11px;">(${stats.enabled_clients})</span>`;
+
+                    // Show traffic: ↑up ↓down
+                    trafficCell.innerHTML = `
+                        <span style="color: #3498db; font-size: 12px;">
+                            ↑${formatBytes(stats.traffic_up)}
+                        </span><br>
+                        <span style="color: #e67e22; font-size: 12px;">
+                            ↓${formatBytes(stats.traffic_down)}
+                        </span>
+                    `;
                 } else {
                     statsCell.innerHTML = `<span style="color: #e74c3c;">offline</span>`;
+                    trafficCell.innerHTML = `<span style="color: #e74c3c;">-</span>`;
                 }
             } catch (error) {
                 const statsCell = document.getElementById(`stats-${nodeId}`);
+                const trafficCell = document.getElementById(`traffic-${nodeId}`);
                 statsCell.innerHTML = `<span style="color: #e74c3c;">error</span>`;
+                trafficCell.innerHTML = `<span style="color: #e74c3c;">-</span>`;
             }
         }
 

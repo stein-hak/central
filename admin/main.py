@@ -365,7 +365,7 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         )
 
         if login_response.status_code != 200:
-            return {"online": False, "total_clients": 0, "active_clients": 0}
+            return {"online": False, "total_clients": 0, "enabled_clients": 0, "online_clients": 0, "traffic_up": 0, "traffic_down": 0, "traffic_total": 0}
 
         # Get inbounds
         inbounds_response = session.get(
@@ -375,31 +375,63 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         )
 
         if inbounds_response.status_code != 200:
-            return {"online": False, "total_clients": 0, "active_clients": 0}
+            return {"online": False, "total_clients": 0, "enabled_clients": 0, "online_clients": 0, "traffic_up": 0, "traffic_down": 0, "traffic_total": 0}
 
         inbounds_data = inbounds_response.json()
         inbounds = inbounds_data.get("obj", [])
 
-        # Find VLESS-gRPC-Local inbound
+        # Sum traffic across ALL inbounds
+        total_up = 0
+        total_down = 0
+
+        # Find VLESS-gRPC-Local inbound for client counts
         vless_inbound = None
         for inbound in inbounds:
+            # Sum traffic from all inbounds
+            if "up" in inbound:
+                total_up += inbound.get("up", 0)
+            if "down" in inbound:
+                total_down += inbound.get("down", 0)
+
+            # Find VLESS-gRPC-Local for client stats
             if inbound.get("remark") == "VLESS-gRPC-Local":
                 vless_inbound = inbound
-                break
 
         if not vless_inbound:
-            return {"online": True, "total_clients": 0, "active_clients": 0}
+            return {
+                "online": True,
+                "total_clients": 0,
+                "enabled_clients": 0,
+                "online_clients": 0,
+                "traffic_up": total_up,
+                "traffic_down": total_down,
+                "traffic_total": total_up + total_down
+            }
 
         # Count clients
         settings = json.loads(vless_inbound.get("settings", "{}"))
         clients = settings.get("clients", [])
         total_clients = len(clients)
-        active_clients = sum(1 for c in clients if c.get("enable", True))
+
+        # Get client stats to count truly online clients
+        # clientStats shows clients with active traffic
+        client_stats = vless_inbound.get("clientStats", [])
+
+        # Count clients that are actually online (have traffic in clientStats)
+        online_client_emails = set(stat.get("email") for stat in client_stats if stat.get("email"))
+
+        # Count enabled vs online
+        enabled_clients = sum(1 for c in clients if c.get("enable", True))
+        online_clients = len(online_client_emails)
 
         result = {
             "online": True,
             "total_clients": total_clients,
-            "active_clients": active_clients
+            "enabled_clients": enabled_clients,
+            "online_clients": online_clients,
+            "traffic_up": total_up,
+            "traffic_down": total_down,
+            "traffic_total": total_up + total_down
         }
 
         # Cache the result
@@ -407,7 +439,7 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         return result
 
     except Exception:
-        result = {"online": False, "total_clients": 0, "active_clients": 0}
+        result = {"online": False, "total_clients": 0, "enabled_clients": 0, "online_clients": 0, "traffic_up": 0, "traffic_down": 0, "traffic_total": 0}
         # Cache failures too (avoid repeated failed requests)
         stats_cache[cache_key] = (result, time.time())
         return result
