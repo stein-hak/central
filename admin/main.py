@@ -315,6 +315,68 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
     return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled} for n in nodes]
 
 
+@app.get("/api/nodes/{node_id}/stats")
+async def get_node_stats(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Get node statistics (client counts)"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    try:
+        session = requests.Session()
+
+        # Login
+        login_response = session.post(
+            f"{node.url}/login",
+            data={"username": node.username, "password": node.password},
+            verify=False,
+            timeout=10
+        )
+
+        if login_response.status_code != 200:
+            return {"online": False, "total_clients": 0, "active_clients": 0}
+
+        # Get inbounds
+        inbounds_response = session.get(
+            f"{node.url}/panel/api/inbounds/list",
+            verify=False,
+            timeout=10
+        )
+
+        if inbounds_response.status_code != 200:
+            return {"online": False, "total_clients": 0, "active_clients": 0}
+
+        inbounds_data = inbounds_response.json()
+        inbounds = inbounds_data.get("obj", [])
+
+        # Find VLESS-gRPC-Local inbound
+        vless_inbound = None
+        for inbound in inbounds:
+            if inbound.get("remark") == "VLESS-gRPC-Local":
+                vless_inbound = inbound
+                break
+
+        if not vless_inbound:
+            return {"online": True, "total_clients": 0, "active_clients": 0}
+
+        # Count clients
+        settings = json.loads(vless_inbound.get("settings", "{}"))
+        clients = settings.get("clients", [])
+        total_clients = len(clients)
+        active_clients = sum(1 for c in clients if c.get("enable", True))
+
+        return {
+            "online": True,
+            "total_clients": total_clients,
+            "active_clients": active_clients
+        }
+
+    except Exception:
+        return {"online": False, "total_clients": 0, "active_clients": 0}
+
+
 @app.get("/api/nodes/{node_id}")
 async def get_node(request: Request, node_id: int, db: Session = Depends(get_db)):
     """Get single node details"""
@@ -395,6 +457,87 @@ async def update_node(
     db.refresh(node)
 
     return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
+
+
+@app.post("/api/nodes/{node_id}/test")
+async def test_node(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Test node connection and credentials"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    try:
+        session = requests.Session()
+
+        # Test login
+        login_response = session.post(
+            f"{node.url}/login",
+            data={"username": node.username, "password": node.password},
+            verify=False,
+            timeout=10
+        )
+
+        if login_response.status_code != 200:
+            return {
+                "success": False,
+                "message": f"Login failed (HTTP {login_response.status_code})"
+            }
+
+        # Get inbounds
+        inbounds_response = session.get(
+            f"{node.url}/panel/api/inbounds/list",
+            verify=False,
+            timeout=10
+        )
+
+        if inbounds_response.status_code != 200:
+            return {
+                "success": False,
+                "message": f"Failed to get inbounds (HTTP {inbounds_response.status_code})"
+            }
+
+        inbounds_data = inbounds_response.json()
+        inbounds = inbounds_data.get("obj", [])
+
+        # Find VLESS-gRPC-Local inbound
+        vless_inbound = None
+        for inbound in inbounds:
+            if inbound.get("remark") == "VLESS-gRPC-Local":
+                vless_inbound = inbound
+                break
+
+        if not vless_inbound:
+            return {
+                "success": False,
+                "message": "VLESS-gRPC-Local inbound not found"
+            }
+
+        # Count clients
+        settings = json.loads(vless_inbound.get("settings", "{}"))
+        clients_count = len(settings.get("clients", []))
+
+        return {
+            "success": True,
+            "message": f"Connection successful! Found {clients_count} clients"
+        }
+
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "message": "Connection timeout"
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "message": "Connection refused"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
 
 
 @app.delete("/api/nodes/{node_id}")
