@@ -9,13 +9,13 @@ from database import get_db, Client, Key
 app = FastAPI(title="Subscription Service")
 
 
-@app.get("/")
-async def root():
+@app.get("/health")
+async def health():
     """Health check"""
     return {"status": "ok", "service": "subscription"}
 
 
-@app.get("/sub/{client_email}", response_class=PlainTextResponse)
+@app.get("/{client_email}", response_class=PlainTextResponse)
 async def get_subscription(client_email: str, db: Session = Depends(get_db)):
     """
     Get subscription for client

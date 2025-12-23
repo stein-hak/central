@@ -92,19 +92,19 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
         inbounds_data = inbounds_response.json()
         inbounds = inbounds_data.get("obj", [])
 
-        # Find first VLESS inbound
+        # Find VLESS-gRPC-Local inbound
         vless_inbound = None
         for inbound in inbounds:
-            if inbound.get("protocol") == "vless":
+            if inbound.get("remark") == "VLESS-gRPC-Local":
                 vless_inbound = inbound
                 break
 
         if not vless_inbound:
-            raise Exception("No VLESS inbound found on node")
+            raise Exception("VLESS-gRPC-Local inbound not found on node")
 
         inbound_id = vless_inbound["id"]
 
-        # Parse existing settings
+        # Parse existing settings to check if client already exists
         settings = json.loads(vless_inbound.get("settings", "{}"))
         clients_list = settings.get("clients", [])
 
@@ -116,58 +116,45 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                 break
 
         if existing_client:
-            # Update UUID if different
-            if existing_client.get("id") != str(client_uuid):
-                existing_client["id"] = str(client_uuid)
-                existing_client["enable"] = client.enabled
-
-                # Update inbound
-                update_data = {
-                    "id": inbound_id,
-                    "settings": json.dumps(settings)
-                }
-
-                update_response = session.post(
-                    f"{node.url}/panel/api/inbounds/update/{inbound_id}",
-                    json=update_data,
-                    verify=False,
-                    timeout=10
-                )
-
-                if update_response.status_code != 200:
-                    raise Exception(f"Failed to update client: {update_response.status_code}")
-        else:
-            # Add new client
-            new_client = {
-                "id": str(client_uuid),
-                "flow": "",
-                "email": client.email,
-                "limitIp": 0,
-                "totalGB": 0,
-                "expiryTime": 0,
-                "enable": client.enabled,
-                "tgId": "",
-                "subId": client.email
-            }
-
-            clients_list.append(new_client)
-            settings["clients"] = clients_list
-
-            # Update inbound
-            update_data = {
-                "id": inbound_id,
-                "settings": json.dumps(settings)
-            }
-
-            update_response = session.post(
-                f"{node.url}/panel/api/inbounds/update/{inbound_id}",
-                json=update_data,
+            # Delete existing client first
+            delete_response = session.post(
+                f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
                 verify=False,
                 timeout=10
             )
 
-            if update_response.status_code != 200:
-                raise Exception(f"Failed to add client: {update_response.status_code}")
+            if delete_response.status_code != 200:
+                raise Exception(f"Failed to delete existing client: {delete_response.status_code}")
+
+        # Add client using addClient endpoint (safe, doesn't override inbound)
+        client_config = {
+            "id": inbound_id,
+            "settings": json.dumps({
+                "clients": [
+                    {
+                        "id": str(client_uuid),
+                        "flow": "",
+                        "email": client.email,
+                        "limitIp": 0,
+                        "totalGB": 0,
+                        "expiryTime": 0,
+                        "enable": client.enabled,
+                        "tgId": "",
+                        "subId": client.email
+                    }
+                ]
+            })
+        }
+
+        add_response = session.post(
+            f"{node.url}/panel/api/inbounds/addClient",
+            json=client_config,
+            verify=False,
+            timeout=10
+        )
+
+        if add_response.status_code != 200:
+            raise Exception(f"Failed to add client: {add_response.status_code}")
 
         # Generate VLESS URL
         vless_url = create_vless_url(node, client.email, str(client_uuid), inbound_id)
@@ -216,7 +203,7 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
         if login_response.status_code != 200:
             return False, f"Login failed: {login_response.status_code}"
 
-        # Get inbounds
+        # Get inbounds to find VLESS-gRPC-Local
         inbounds_response = session.get(
             f"{node.url}/panel/api/inbounds/list",
             verify=False,
@@ -229,33 +216,25 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
         inbounds_data = inbounds_response.json()
         inbounds = inbounds_data.get("obj", [])
 
-        # Remove client from all inbounds
+        # Find VLESS-gRPC-Local inbound
+        vless_inbound = None
         for inbound in inbounds:
-            if inbound.get("protocol") != "vless":
-                continue
+            if inbound.get("remark") == "VLESS-gRPC-Local":
+                vless_inbound = inbound
+                break
 
-            inbound_id = inbound["id"]
-            settings = json.loads(inbound.get("settings", "{}"))
-            clients_list = settings.get("clients", [])
+        if vless_inbound:
+            inbound_id = vless_inbound["id"]
 
-            # Filter out this client
-            new_clients = [c for c in clients_list if c.get("email") != client.email]
+            # Delete client using delClientByEmail endpoint
+            delete_response = session.post(
+                f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
+                verify=False,
+                timeout=10
+            )
 
-            if len(new_clients) < len(clients_list):
-                # Client was removed, update inbound
-                settings["clients"] = new_clients
-
-                update_data = {
-                    "id": inbound_id,
-                    "settings": json.dumps(settings)
-                }
-
-                session.post(
-                    f"{node.url}/panel/api/inbounds/update/{inbound_id}",
-                    json=update_data,
-                    verify=False,
-                    timeout=10
-                )
+            if delete_response.status_code != 200:
+                return False, f"Failed to delete client: {delete_response.status_code}"
 
         # Delete keys from database
         db.query(Key).filter(
@@ -569,10 +548,12 @@ async def get_client_subscription_link(request: Request, client_id: int, db: Ses
         raise HTTPException(status_code=404, detail="Client not found")
 
     # Get subscription service URL from env
+    # SUBSCRIPTION_URL should include /sub path if nginx proxies it
+    # Example: SUBSCRIPTION_URL=https://sub.example.com/sub
     sub_url = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
 
     return {
-        "subscription_url": f"{sub_url}/sub/{client.email}"
+        "subscription_url": f"{sub_url}/{client.email}"
     }
 
 
