@@ -45,19 +45,18 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
     # Use public domain from node configuration
     domain = node.domain
 
-    # Format: vless://UUID@DOMAIN:443?encryption=none&security=tls&type=grpc&serviceName=api#EMAIL
-    # Match format from xui-client
+    # Format: vless://UUID@DOMAIN:443?encryption=none&security=tls&type=grpc&serviceName=sync#EMAIL
     import urllib.parse
 
     params = {
         "encryption": "none",
         "security": "tls",
         "type": "grpc",
-        "serviceName": "api"
+        "serviceName": "sync"
     }
 
     query_string = urllib.parse.urlencode(params)
-    remark = urllib.parse.quote(client_email)
+    remark = urllib.parse.quote(f"{node.name}-{client_email}")
 
     vless_url = f"vless://{client_uuid}@{domain}:443?{query_string}#{remark}"
 
