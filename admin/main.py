@@ -764,6 +764,69 @@ async def create_client(
     }
 
 
+@app.post("/api/clients/batch")
+async def batch_create_clients(
+    request: Request,
+    seed: str = Form(...),
+    count: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Batch create clients with pattern: seed0, seed1, ..., seed(count-1)"""
+    check_auth(request)
+
+    if count < 1 or count > 100:
+        raise HTTPException(status_code=400, detail="Count must be between 1 and 100")
+
+    created_count = 0
+    failed_count = 0
+    total_synced = 0
+    subscription_urls = []
+
+    # Get all enabled nodes
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+    subscription_base_url = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+
+    for i in range(count):
+        email = f"{seed}{i}"
+
+        # Skip if already exists
+        existing = db.query(Client).filter(Client.email == email).first()
+        if existing:
+            failed_count += 1
+            continue
+
+        # Create client
+        client = Client(email=email, enabled=True)
+        db.add(client)
+        db.commit()
+        db.refresh(client)
+
+        # Generate UUID for this client
+        client_uuid = uuid.uuid4()
+
+        # Sync to all enabled nodes
+        for node in nodes:
+            success, message = sync_client_to_node(node, client, client_uuid, db)
+            if success:
+                total_synced += 1
+
+        # Add subscription URL
+        subscription_url = f"{subscription_base_url}/{email}"
+        subscription_urls.append({
+            "email": email,
+            "url": subscription_url
+        })
+
+        created_count += 1
+
+    return {
+        "created": created_count,
+        "failed": failed_count,
+        "total_synced": total_synced,
+        "subscriptions": subscription_urls
+    }
+
+
 @app.put("/api/clients/{client_id}/enable")
 async def enable_client(request: Request, client_id: int, db: Session = Depends(get_db)):
     """Enable client on all nodes"""

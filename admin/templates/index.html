@@ -338,6 +338,22 @@
             </div>
 
             <div class="card">
+                <h2 data-i18n="batch_create">Batch Create Clients</h2>
+                <form id="batchClientForm">
+                    <div class="form-group">
+                        <label data-i18n="client_seed">Client Name Seed</label>
+                        <input type="text" name="seed" required placeholder="Client" value="Client">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="client_count">Count</label>
+                        <input type="number" name="count" required min="1" max="100" placeholder="20" value="20">
+                    </div>
+                    <p style="color: #7f8c8d; font-size: 13px;" data-i18n="batch_example">Example: "Client" + 20 = Client0, Client1, ..., Client19</p>
+                    <button type="submit" class="btn btn-primary" data-i18n="btn_batch_create">Batch Create</button>
+                </form>
+            </div>
+
+            <div class="card">
                 <h2 data-i18n="clients_list">Clients</h2>
                 <div class="form-group">
                     <input type="text" id="clientSearch" data-i18n-placeholder="search_clients" placeholder="Search by email..." style="width: 100%; max-width: 400px;">
@@ -404,6 +420,21 @@
         </div>
     </div>
 
+    <!-- Batch Subscriptions Modal -->
+    <div id="batchSubsModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header" data-i18n="batch_subs_title">Batch Subscription Links</div>
+            <p style="color: #7f8c8d; margin-bottom: 15px;" data-i18n="batch_subs_desc">Copy these subscription URLs and distribute to clients:</p>
+            <div style="background: #ecf0f1; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">
+                <pre id="batchSubsList" style="margin: 0;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-success" onclick="copyBatchSubs()" data-i18n="btn_copy">Copy All</button>
+                <button class="btn btn-primary" onclick="closeBatchSubsModal()" data-i18n="btn_close">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const translations = {
@@ -430,6 +461,11 @@
                 add_client: 'Add New Client',
                 email: 'Email',
                 btn_add_client: 'Add Client',
+                batch_create: 'Batch Create Clients',
+                client_seed: 'Client Name Seed',
+                client_count: 'Count',
+                batch_example: 'Example: "Client" + 20 = Client0, Client1, ..., Client19',
+                btn_batch_create: 'Batch Create',
                 clients_list: 'Clients',
                 search_clients: 'Search by email...',
                 th_email: 'Email',
@@ -441,6 +477,9 @@
                 btn_edit: 'Edit',
                 btn_save: 'Save',
                 btn_cancel: 'Cancel',
+                btn_copy: 'Copy All',
+                batch_subs_title: 'Batch Subscription Links',
+                batch_subs_desc: 'Copy these subscription URLs and distribute to clients:',
                 btn_delete: 'Delete',
                 btn_enable: 'Enable',
                 btn_disable: 'Disable',
@@ -476,6 +515,11 @@
                 add_client: 'Добавить нового клиента',
                 email: 'Email',
                 btn_add_client: 'Добавить клиента',
+                batch_create: 'Массовое создание клиентов',
+                client_seed: 'Базовое имя клиента',
+                client_count: 'Количество',
+                batch_example: 'Пример: "Client" + 20 = Client0, Client1, ..., Client19',
+                btn_batch_create: 'Создать пакетом',
                 clients_list: 'Клиенты',
                 search_clients: 'Поиск по email...',
                 th_email: 'Email',
@@ -487,6 +531,9 @@
                 btn_edit: 'Изменить',
                 btn_save: 'Сохранить',
                 btn_cancel: 'Отмена',
+                btn_copy: 'Копировать все',
+                batch_subs_title: 'Список ссылок на подписки',
+                batch_subs_desc: 'Скопируйте эти URL подписок и раздайте клиентам:',
                 btn_delete: 'Удалить',
                 btn_enable: 'Включить',
                 btn_disable: 'Отключить',
@@ -794,6 +841,53 @@
                 alert(translations[currentLang].alert_error + ': ' + error.detail);
             }
         });
+
+        // Batch create clients
+        document.getElementById('batchClientForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+
+            const seed = formData.get('seed');
+            const count = parseInt(formData.get('count'));
+
+            if (!confirm(`Create ${count} clients: ${seed}0, ${seed}1, ..., ${seed}${count-1}?`)) {
+                return;
+            }
+
+            const response = await fetch('/api/clients/batch', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+
+                // Build subscription list text
+                let subsText = '';
+                data.subscriptions.forEach(sub => {
+                    subsText += `${sub.email}: ${sub.url}\n`;
+                });
+
+                // Show modal with subscription URLs
+                document.getElementById('batchSubsList').textContent = subsText;
+                document.getElementById('batchSubsModal').classList.add('active');
+
+                loadClients();
+            } else {
+                const error = await response.json();
+                alert('Error: ' + error.detail);
+            }
+        });
+
+        function closeBatchSubsModal() {
+            document.getElementById('batchSubsModal').classList.remove('active');
+        }
+
+        function copyBatchSubs() {
+            const text = document.getElementById('batchSubsList').textContent;
+            navigator.clipboard.writeText(text);
+            alert('Copied to clipboard!');
+        }
 
         // Enable client
         async function enableClient(id) {
