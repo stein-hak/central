@@ -339,6 +339,9 @@
 
             <div class="card">
                 <h2 data-i18n="clients_list">Clients</h2>
+                <div class="form-group">
+                    <input type="text" id="clientSearch" data-i18n-placeholder="search_clients" placeholder="Search by email..." style="width: 100%; max-width: 400px;">
+                </div>
                 <table id="clientsTable">
                     <thead>
                         <tr>
@@ -428,6 +431,7 @@
                 email: 'Email',
                 btn_add_client: 'Add Client',
                 clients_list: 'Clients',
+                search_clients: 'Search by email...',
                 th_email: 'Email',
                 th_keys: 'Keys',
                 th_created: 'Created',
@@ -473,6 +477,7 @@
                 email: 'Email',
                 btn_add_client: 'Добавить клиента',
                 clients_list: 'Клиенты',
+                search_clients: 'Поиск по email...',
                 th_email: 'Email',
                 th_keys: 'Ключи',
                 th_created: 'Создан',
@@ -502,11 +507,19 @@
             currentLang = lang;
             localStorage.setItem('lang', lang);
 
-            // Update UI
+            // Update UI text
             document.querySelectorAll('[data-i18n]').forEach(el => {
                 const key = el.getAttribute('data-i18n');
                 if (translations[lang][key]) {
                     el.textContent = translations[lang][key];
+                }
+            });
+
+            // Update placeholders
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                if (translations[lang][key]) {
+                    el.placeholder = translations[lang][key];
                 }
             });
 
@@ -712,6 +725,9 @@
                 const date = new Date(client.created_at).toLocaleDateString();
                 const statusText = client.enabled ? translations[currentLang].status_enabled : translations[currentLang].status_disabled;
 
+                // Add data attribute for searching
+                tr.setAttribute('data-email', client.email.toLowerCase());
+
                 tr.innerHTML = `
                     <td>${client.email}</td>
                     <td><span class="badge badge-${client.enabled ? 'success' : 'danger'}">${statusText}</span></td>
@@ -729,6 +745,21 @@
                 tbody.appendChild(tr);
             });
         }
+
+        // Client search filter
+        document.getElementById('clientSearch').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const rows = document.querySelectorAll('#clientsTable tbody tr');
+
+            rows.forEach(row => {
+                const email = row.getAttribute('data-email');
+                if (email.includes(searchTerm)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
 
         // Add client
         document.getElementById('addClientForm').addEventListener('submit', async (e) => {
