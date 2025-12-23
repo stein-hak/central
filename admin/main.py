@@ -497,7 +497,44 @@ async def create_node(
     db.commit()
     db.refresh(node)
 
-    return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
+    # Sync all existing clients to this new node
+    clients = db.query(Client).all()
+    synced_count = 0
+    failed_count = 0
+
+    for client in clients:
+        # Find client's UUID from existing keys
+        existing_key = db.query(Key).filter(Key.client_id == client.id).first()
+        if existing_key:
+            # Use the same UUID as other nodes
+            client_uuid = existing_key.vless_url.split('://')[1].split('@')[0]
+
+            success, vless_url = sync_client_to_node(node, client, client_uuid, db)
+
+            if success:
+                # Save key to database
+                key = Key(
+                    client_id=client.id,
+                    node_id=node.id,
+                    inbound_id=1,  # VLESS-gRPC-Local inbound
+                    uuid=client_uuid,
+                    vless_url=vless_url
+                )
+                db.add(key)
+                synced_count += 1
+            else:
+                failed_count += 1
+
+    db.commit()
+
+    return {
+        "id": node.id,
+        "name": node.name,
+        "url": node.url,
+        "domain": node.domain,
+        "synced_clients": synced_count,
+        "failed_clients": failed_count
+    }
 
 
 @app.put("/api/nodes/{node_id}")

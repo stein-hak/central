@@ -637,10 +637,17 @@
             e.preventDefault();
             const formData = new FormData(e.target);
 
-            await fetch('/api/nodes', {
+            const response = await fetch('/api/nodes', {
                 method: 'POST',
                 body: formData
             });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.synced_clients > 0 || data.failed_clients > 0) {
+                    alert(`Node added!\nSynced ${data.synced_clients} clients\nFailed ${data.failed_clients} clients`);
+                }
+            }
 
             e.target.reset();
             loadNodes();
