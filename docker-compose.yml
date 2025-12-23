@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database
   postgres:
@@ -13,7 +11,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     networks:
       - xui-network
     restart: unless-stopped
@@ -27,7 +25,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       SUBSCRIPTION_URL: ${SUBSCRIPTION_URL:-http://localhost:8001}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - postgres
     networks:
@@ -43,7 +41,7 @@ services:
     environment:
       DATABASE_URL_READONLY: postgresql://sub_readonly:sub_readonly_password@postgres:5432/xui_central
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     depends_on:
       - postgres
     networks:
