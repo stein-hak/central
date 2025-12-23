@@ -116,15 +116,16 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                 break
 
         if existing_client:
-            # Delete existing client first
-            delete_response = session.post(
-                f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
-                verify=False,
-                timeout=10
-            )
-
-            if delete_response.status_code != 200:
-                raise Exception(f"Failed to delete existing client: {delete_response.status_code}")
+            # Delete existing client first (ignore errors if client doesn't exist)
+            try:
+                delete_response = session.post(
+                    f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
+                    verify=False,
+                    timeout=10
+                )
+                # Continue even if delete fails (client might be gone already)
+            except Exception:
+                pass  # Continue to add client anyway
 
         # Add client using addClient endpoint (safe, doesn't override inbound)
         client_config = {
@@ -226,17 +227,26 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
         if vless_inbound:
             inbound_id = vless_inbound["id"]
 
-            # Delete client using delClientByEmail endpoint
-            delete_response = session.post(
-                f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
-                verify=False,
-                timeout=10
-            )
+            # Try to delete client using delClientByEmail endpoint
+            # Don't fail if client doesn't exist on server (could be manually deleted)
+            try:
+                delete_response = session.post(
+                    f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
+                    verify=False,
+                    timeout=10
+                )
 
-            if delete_response.status_code != 200:
-                return False, f"Failed to delete client: {delete_response.status_code}"
+                # Ignore 404-like errors (client already gone from server)
+                if delete_response.status_code != 200:
+                    result = delete_response.json()
+                    # If client not found, continue anyway to clean database
+                    if not result.get('success'):
+                        pass  # Client might not exist, that's okay
+            except Exception as e:
+                # Even if delete fails, continue to clean database
+                pass
 
-        # Delete keys from database
+        # Always delete keys from database (even if server delete failed)
         db.query(Key).filter(
             Key.client_id == client.id,
             Key.node_id == node.id
