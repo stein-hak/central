@@ -417,6 +417,13 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         # clientStats shows clients with active traffic
         client_stats = vless_inbound.get("clientStats", [])
 
+        # DEBUG: Log the structure to understand what we get
+        import sys
+        print(f"DEBUG: clientStats for node {node.name}:", file=sys.stderr)
+        print(f"  Total clientStats entries: {len(client_stats)}", file=sys.stderr)
+        if client_stats:
+            print(f"  Sample entry: {client_stats[0] if client_stats else 'none'}", file=sys.stderr)
+
         # Count clients that are actually online (have traffic in clientStats)
         online_client_emails = set(stat.get("email") for stat in client_stats if stat.get("email"))
 
