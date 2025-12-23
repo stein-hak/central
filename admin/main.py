@@ -326,6 +326,26 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
     return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled} for n in nodes]
 
 
+@app.get("/api/nodes/{node_id}")
+async def get_node(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Get single node details"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    return {
+        "id": node.id,
+        "name": node.name,
+        "url": node.url,
+        "domain": node.domain,
+        "username": node.username,
+        "password": node.password,
+        "enabled": node.enabled
+    }
+
+
 @app.post("/api/nodes")
 async def create_node(
     request: Request,
@@ -346,6 +366,42 @@ async def create_node(
 
     node = Node(name=name, url=url.rstrip('/'), domain=domain, username=username, password=password)
     db.add(node)
+    db.commit()
+    db.refresh(node)
+
+    return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
+
+
+@app.put("/api/nodes/{node_id}")
+async def update_node(
+    request: Request,
+    node_id: int,
+    name: str = Form(...),
+    url: str = Form(...),
+    domain: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Update node"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    # Check if name is being changed and conflicts
+    if node.name != name:
+        existing = db.query(Node).filter(Node.name == name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Node name already exists")
+
+    node.name = name
+    node.url = url.rstrip('/')
+    node.domain = domain
+    node.username = username
+    node.password = password
+
     db.commit()
     db.refresh(node)
 

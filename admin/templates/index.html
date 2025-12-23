@@ -354,6 +354,40 @@
         </div>
     </div>
 
+    <!-- Edit Node Modal -->
+    <div id="editNodeModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" data-i18n="edit_node">Edit Node</div>
+            <form id="editNodeForm">
+                <input type="hidden" id="editNodeId">
+                <div class="form-group">
+                    <label data-i18n="node_name">Node Name</label>
+                    <input type="text" id="editNodeName" required>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="panel_url">API URL (Tailscale)</label>
+                    <input type="url" id="editNodeUrl" required>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="public_domain">Public Domain</label>
+                    <input type="text" id="editNodeDomain" required>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="username">Username</label>
+                    <input type="text" id="editNodeUsername" required>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="password">Password</label>
+                    <input type="password" id="editNodePassword" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary" data-i18n="btn_save">Save</button>
+                    <button type="button" class="btn" onclick="closeEditNodeModal()" data-i18n="btn_cancel">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Subscription Modal -->
     <div id="subModal" class="modal">
         <div class="modal-content">
@@ -395,9 +429,13 @@
                 th_created: 'Created',
                 modal_title: 'Subscription Link',
                 btn_close: 'Close',
+                btn_edit: 'Edit',
+                btn_save: 'Save',
+                btn_cancel: 'Cancel',
                 btn_delete: 'Delete',
                 btn_enable: 'Enable',
                 btn_disable: 'Disable',
+                edit_node: 'Edit Node',
                 btn_sub_link: 'Sub Link',
                 status_enabled: 'Enabled',
                 status_disabled: 'Disabled',
@@ -433,9 +471,13 @@
                 th_created: 'Создан',
                 modal_title: 'Ссылка на подписку',
                 btn_close: 'Закрыть',
+                btn_edit: 'Изменить',
+                btn_save: 'Сохранить',
+                btn_cancel: 'Отмена',
                 btn_delete: 'Удалить',
                 btn_enable: 'Включить',
                 btn_disable: 'Отключить',
+                edit_node: 'Редактировать узел',
                 btn_sub_link: 'Подписка',
                 status_enabled: 'Включен',
                 status_disabled: 'Отключен',
@@ -511,6 +553,7 @@
                     <td>${node.domain}</td>
                     <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span></td>
                     <td>
+                        <button class="btn btn-primary" onclick="editNode(${node.id})">${translations[currentLang].btn_edit}</button>
                         <button class="btn btn-danger" onclick="deleteNode(${node.id})">${translations[currentLang].btn_delete}</button>
                     </td>
                 `;
@@ -529,6 +572,46 @@
             });
 
             e.target.reset();
+            loadNodes();
+        });
+
+        // Edit node
+        async function editNode(id) {
+            const response = await fetch(`/api/nodes/${id}`);
+            const node = await response.json();
+
+            document.getElementById('editNodeId').value = node.id;
+            document.getElementById('editNodeName').value = node.name;
+            document.getElementById('editNodeUrl').value = node.url;
+            document.getElementById('editNodeDomain').value = node.domain;
+            document.getElementById('editNodeUsername').value = node.username;
+            document.getElementById('editNodePassword').value = node.password;
+
+            document.getElementById('editNodeModal').classList.add('active');
+        }
+
+        function closeEditNodeModal() {
+            document.getElementById('editNodeModal').classList.remove('active');
+        }
+
+        // Update node
+        document.getElementById('editNodeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const id = document.getElementById('editNodeId').value;
+            const formData = new FormData();
+            formData.append('name', document.getElementById('editNodeName').value);
+            formData.append('url', document.getElementById('editNodeUrl').value);
+            formData.append('domain', document.getElementById('editNodeDomain').value);
+            formData.append('username', document.getElementById('editNodeUsername').value);
+            formData.append('password', document.getElementById('editNodePassword').value);
+
+            await fetch(`/api/nodes/${id}`, {
+                method: 'PUT',
+                body: formData
+            });
+
+            closeEditNodeModal();
             loadNodes();
         });
 
