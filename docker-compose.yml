@@ -41,6 +41,7 @@ services:
     container_name: xui-central-subscription
     environment:
       DATABASE_URL_READONLY: postgresql://sub_readonly:sub_readonly_password@postgres:5432/xui_central
+      PROFILE_TITLE: ${PROFILE_TITLE:-VPN Service}
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:

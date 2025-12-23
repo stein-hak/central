@@ -78,6 +78,11 @@ curl http://localhost:8001/sub/user@example.com
 
 Returns base64 encoded list of VLESS URLs (one per line).
 
+**Auto-Update Feature:**
+- VPN clients automatically update every 24 hours
+- Profile title shows your brand name (configurable via `PROFILE_TITLE`)
+- Headers include: `profile-update-interval`, `subscription-userinfo`
+
 ## Database Schema
 
 ### nodes
@@ -154,6 +159,7 @@ This removes the client from ALL nodes and deletes all keys.
 
 **Subscription Service:**
 - `DATABASE_URL_READONLY` - PostgreSQL read-only connection
+- `PROFILE_TITLE` - Brand name shown in VPN clients (default: "VPN Service")
 
 ## Security
 
