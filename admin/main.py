@@ -2,6 +2,7 @@
 import os
 import uuid
 import json
+import time
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -21,6 +22,10 @@ templates = Jinja2Templates(directory="templates")
 # Simple session storage (in production use Redis)
 sessions = {}
 
+# Stats cache with TTL (cache stats for 30 seconds to avoid hammering nodes)
+stats_cache = {}
+STATS_CACHE_TTL = 30  # seconds
+
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 
@@ -34,6 +39,17 @@ def check_auth(request: Request):
     if not session_id or session_id not in sessions:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return True
+
+
+# ============================================================================
+# Cache Management
+# ============================================================================
+
+def clear_node_stats_cache(node_id: int):
+    """Clear cached stats for a node"""
+    cache_key = f"stats_{node_id}"
+    if cache_key in stats_cache:
+        del stats_cache[cache_key]
 
 
 # ============================================================================
@@ -182,6 +198,9 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
 
         db.commit()
 
+        # Clear stats cache for this node
+        clear_node_stats_cache(node.id)
+
         return True, vless_url
 
     except Exception as e:
@@ -253,6 +272,9 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
         ).delete()
         db.commit()
 
+        # Clear stats cache for this node
+        clear_node_stats_cache(node.id)
+
         return True, "Deleted successfully"
 
     except Exception as e:
@@ -317,8 +339,15 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/nodes/{node_id}/stats")
 async def get_node_stats(request: Request, node_id: int, db: Session = Depends(get_db)):
-    """Get node statistics (client counts)"""
+    """Get node statistics (client counts) - cached for 30s"""
     check_auth(request)
+
+    # Check cache first
+    cache_key = f"stats_{node_id}"
+    if cache_key in stats_cache:
+        cached_data, cached_time = stats_cache[cache_key]
+        if time.time() - cached_time < STATS_CACHE_TTL:
+            return cached_data
 
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
@@ -367,14 +396,21 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         total_clients = len(clients)
         active_clients = sum(1 for c in clients if c.get("enable", True))
 
-        return {
+        result = {
             "online": True,
             "total_clients": total_clients,
             "active_clients": active_clients
         }
 
+        # Cache the result
+        stats_cache[cache_key] = (result, time.time())
+        return result
+
     except Exception:
-        return {"online": False, "total_clients": 0, "active_clients": 0}
+        result = {"online": False, "total_clients": 0, "active_clients": 0}
+        # Cache failures too (avoid repeated failed requests)
+        stats_cache[cache_key] = (result, time.time())
+        return result
 
 
 @app.get("/api/nodes/{node_id}")
