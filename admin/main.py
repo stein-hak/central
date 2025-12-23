@@ -414,18 +414,20 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         total_clients = len(clients)
 
         # Get client stats to count truly online clients
-        # clientStats shows clients with active traffic
+        # clientStats shows clients with traffic history
         client_stats = vless_inbound.get("clientStats", [])
 
-        # DEBUG: Log the structure to understand what we get
-        import sys
-        print(f"DEBUG: clientStats for node {node.name}:", file=sys.stderr)
-        print(f"  Total clientStats entries: {len(client_stats)}", file=sys.stderr)
-        if client_stats:
-            print(f"  Sample entry: {client_stats[0] if client_stats else 'none'}", file=sys.stderr)
+        # Count clients that are ACTUALLY online (lastOnline within 2 minutes)
+        # lastOnline is in milliseconds
+        current_time_ms = time.time() * 1000
+        online_threshold_ms = 2 * 60 * 1000  # 2 minutes in milliseconds
 
-        # Count clients that are actually online (have traffic in clientStats)
-        online_client_emails = set(stat.get("email") for stat in client_stats if stat.get("email"))
+        online_client_emails = set()
+        for stat in client_stats:
+            last_online = stat.get("lastOnline", 0)
+            email = stat.get("email")
+            if email and last_online and (current_time_ms - last_online) < online_threshold_ms:
+                online_client_emails.add(email)
 
         # Count enabled vs online
         enabled_clients = sum(1 for c in clients if c.get("enable", True))
