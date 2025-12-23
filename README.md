@@ -96,10 +96,15 @@ Returns base64 encoded list of VLESS URLs (one per line).
 ```
 Admin UI → Nodes → Add New Node
 - Name: node-vienna
-- URL: https://vienna.example.com:2053
+- API URL: https://100.64.1.5:2053 (Tailscale IP for management)
+- Public Domain: vienna.example.com (for VLESS URLs)
 - Username: admin
 - Password: password123
 ```
+
+**Important**:
+- **API URL** - Internal address for managing the node (Tailscale IP, private network, etc.)
+- **Public Domain** - Public-facing domain used in generated VLESS links for clients
 
 ### 2. Add Clients
 
@@ -214,6 +219,43 @@ ufw allow from 10.0.0.0/8 to any port 8000
 # Allow public subscription access
 ufw allow 8001
 ```
+
+## Upgrading from Previous Versions
+
+If you're upgrading from a version without the `domain` field:
+
+### 1. Pull latest changes
+
+```bash
+cd /opt/central
+git pull
+```
+
+### 2. Run migration
+
+```bash
+docker compose exec postgres psql -U postgres -d xui_central -f /migrations/001_add_domain_column.sql
+```
+
+### 3. Verify and fix domains
+
+```bash
+docker compose exec postgres psql -U postgres -d xui_central -c "SELECT id, name, url, domain FROM nodes;"
+```
+
+Update incorrect domains:
+
+```bash
+docker compose exec postgres psql -U postgres -d xui_central -c "UPDATE nodes SET domain = 'vienna.example.com' WHERE id = 1;"
+```
+
+### 4. Restart services
+
+```bash
+docker compose restart admin subscription
+```
+
+See `migrations/README.md` for detailed migration instructions.
 
 ## Troubleshooting
 

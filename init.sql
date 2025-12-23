@@ -5,11 +5,15 @@ CREATE TABLE IF NOT EXISTS nodes (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     url VARCHAR(512) NOT NULL,
+    domain VARCHAR(255) NOT NULL,
     username VARCHAR(255) NOT NULL,
     password VARCHAR(255) NOT NULL,
     enabled BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+COMMENT ON COLUMN nodes.url IS 'API URL (Tailscale IP or internal address, e.g., https://100.64.1.5:2053)';
+COMMENT ON COLUMN nodes.domain IS 'Public domain for VLESS URLs (e.g., vienna.example.com)';
 
 -- Clients table - VPN users
 CREATE TABLE IF NOT EXISTS clients (

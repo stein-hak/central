@@ -286,7 +286,11 @@
                     </div>
                     <div class="form-group">
                         <label data-i18n="panel_url">Panel URL</label>
-                        <input type="url" name="url" required placeholder="https://node.example.com:2053">
+                        <input type="url" name="url" required placeholder="https://100.64.1.5:2053">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="public_domain">Public Domain</label>
+                        <input type="text" name="domain" required placeholder="vienna.example.com">
                     </div>
                     <div class="form-group">
                         <label data-i18n="username">Username</label>
@@ -306,7 +310,8 @@
                     <thead>
                         <tr>
                             <th data-i18n="th_name">Name</th>
-                            <th data-i18n="th_url">URL</th>
+                            <th data-i18n="th_url">API URL</th>
+                            <th data-i18n="th_domain">Domain</th>
                             <th data-i18n="th_status">Status</th>
                             <th data-i18n="th_actions">Actions</th>
                         </tr>
@@ -370,13 +375,15 @@
                 tab_clients: 'Clients',
                 add_node: 'Add New Node',
                 node_name: 'Node Name',
-                panel_url: 'Panel URL',
+                panel_url: 'API URL (Tailscale)',
+                public_domain: 'Public Domain',
                 username: 'Username',
                 password: 'Password',
                 btn_add_node: 'Add Node',
                 nodes_list: 'Nodes',
                 th_name: 'Name',
-                th_url: 'URL',
+                th_url: 'API URL',
+                th_domain: 'Domain',
                 th_status: 'Status',
                 th_actions: 'Actions',
                 add_client: 'Add New Client',
@@ -406,13 +413,15 @@
                 tab_clients: 'Клиенты',
                 add_node: 'Добавить новый узел',
                 node_name: 'Имя узла',
-                panel_url: 'URL панели',
+                panel_url: 'API URL (Tailscale)',
+                public_domain: 'Публичный домен',
                 username: 'Имя пользователя',
                 password: 'Пароль',
                 btn_add_node: 'Добавить узел',
                 nodes_list: 'Узлы',
                 th_name: 'Имя',
-                th_url: 'URL',
+                th_url: 'API URL',
+                th_domain: 'Домен',
                 th_status: 'Статус',
                 th_actions: 'Действия',
                 add_client: 'Добавить нового клиента',
@@ -499,6 +508,7 @@
                 tr.innerHTML = `
                     <td>${node.name}</td>
                     <td>${node.url}</td>
+                    <td>${node.domain}</td>
                     <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span></td>
                     <td>
                         <button class="btn btn-danger" onclick="deleteNode(${node.id})">${translations[currentLang].btn_delete}</button>

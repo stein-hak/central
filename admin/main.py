@@ -42,15 +42,24 @@ def check_auth(request: Request):
 
 def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int) -> str:
     """Generate VLESS URL for client"""
-    # Parse node URL to get domain
-    from urllib.parse import urlparse
-    parsed = urlparse(node.url)
-    domain = parsed.hostname or node.name
+    # Use public domain from node configuration
+    domain = node.domain
 
-    # For now, create basic VLESS URL (you can customize based on inbound type)
-    # Format: vless://UUID@DOMAIN:443?type=grpc&serviceName=api#REMARK
-    remark = f"{client_email}@{node.name}"
-    vless_url = f"vless://{client_uuid}@{domain}:443?type=grpc&serviceName=api&security=tls&sni={domain}#{remark}"
+    # Format: vless://UUID@DOMAIN:443?encryption=none&security=tls&type=grpc&serviceName=api#EMAIL
+    # Match format from xui-client
+    import urllib.parse
+
+    params = {
+        "encryption": "none",
+        "security": "tls",
+        "type": "grpc",
+        "serviceName": "api"
+    }
+
+    query_string = urllib.parse.urlencode(params)
+    remark = urllib.parse.quote(client_email)
+
+    vless_url = f"vless://{client_uuid}@{domain}:443?{query_string}#{remark}"
 
     return vless_url
 
@@ -315,7 +324,7 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
     """Get all nodes"""
     check_auth(request)
     nodes = db.query(Node).all()
-    return [{"id": n.id, "name": n.name, "url": n.url, "enabled": n.enabled} for n in nodes]
+    return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled} for n in nodes]
 
 
 @app.post("/api/nodes")
@@ -323,6 +332,7 @@ async def create_node(
     request: Request,
     name: str = Form(...),
     url: str = Form(...),
+    domain: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db)
@@ -335,12 +345,12 @@ async def create_node(
     if existing:
         raise HTTPException(status_code=400, detail="Node already exists")
 
-    node = Node(name=name, url=url.rstrip('/'), username=username, password=password)
+    node = Node(name=name, url=url.rstrip('/'), domain=domain, username=username, password=password)
     db.add(node)
     db.commit()
     db.refresh(node)
 
-    return {"id": node.id, "name": node.name, "url": node.url}
+    return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
 
 
 @app.delete("/api/nodes/{node_id}")

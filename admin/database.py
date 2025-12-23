@@ -19,7 +19,8 @@ class Node(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), unique=True, nullable=False)
-    url = Column(String(512), nullable=False)
+    url = Column(String(512), nullable=False)  # API URL (Tailscale IP, e.g., https://100.64.1.5:2053)
+    domain = Column(String(255), nullable=False)  # Public domain for VLESS URLs (e.g., vienna.example.com)
     username = Column(String(255), nullable=False)
     password = Column(String(255), nullable=False)
     enabled = Column(Boolean, default=True)
