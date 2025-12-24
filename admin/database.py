@@ -50,6 +50,7 @@ class Key(Base):
     inbound_id = Column(Integer, nullable=False)
     uuid = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     vless_url = Column(Text, nullable=False)
+    manual = Column(Boolean, default=False)  # True for manually entered keys, False for auto-generated
     created_at = Column(DateTime, default=datetime.utcnow)
 
     client = relationship("Client", back_populates="keys")

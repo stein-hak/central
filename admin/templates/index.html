@@ -349,6 +349,11 @@
                         <label data-i18n="email">Email</label>
                         <input type="text" name="email" required placeholder="user@example.com">
                     </div>
+                    <div class="form-group">
+                        <label data-i18n="manual_keys">Manual VLESS Keys (Optional)</label>
+                        <textarea name="manual_keys" rows="4" placeholder="vless://uuid@domain:port?...&#10;vless://uuid@domain:port?...&#10;(One key per line)" style="font-family: monospace; font-size: 12px;"></textarea>
+                        <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="manual_keys_help">Optional: Add custom VLESS URLs (one per line). These won't be deleted when nodes are removed.</small>
+                    </div>
                     <button type="submit" class="btn btn-primary" data-i18n="btn_add_client">Add Client</button>
                 </form>
             </div>
@@ -493,6 +498,8 @@
                 th_actions: 'Actions',
                 add_client: 'Add New Client',
                 email: 'Email',
+                manual_keys: 'Manual VLESS Keys (Optional)',
+                manual_keys_help: 'Optional: Add custom VLESS URLs (one per line). These won\'t be deleted when nodes are removed.',
                 btn_add_client: 'Add Client',
                 batch_create: 'Batch Create Clients',
                 client_seed: 'Client Name Seed',
@@ -527,7 +534,9 @@
                 status_disabled: 'Disabled',
                 confirm_delete_node: 'Delete this node?',
                 confirm_delete_client: 'Delete this client from all nodes?',
+                confirm_delete_key: 'Delete this manual key?',
                 alert_created: 'Client created and synced to all nodes',
+                alert_key_deleted: 'Manual key deleted',
                 alert_error: 'Error'
             },
             ru: {
@@ -552,6 +561,8 @@
                 th_actions: 'Действия',
                 add_client: 'Добавить нового клиента',
                 email: 'Email',
+                manual_keys: 'Ручные VLESS ключи (необязательно)',
+                manual_keys_help: 'Необязательно: Добавьте пользовательские VLESS URL (один на строку). Они не будут удалены при удалении узлов.',
                 btn_add_client: 'Добавить клиента',
                 batch_create: 'Массовое создание клиентов',
                 client_seed: 'Базовое имя клиента',
@@ -586,7 +597,9 @@
                 status_disabled: 'Отключен',
                 confirm_delete_node: 'Удалить этот узел?',
                 confirm_delete_client: 'Удалить этого клиента со всех узлов?',
+                confirm_delete_key: 'Удалить этот ручной ключ?',
                 alert_created: 'Клиент создан и синхронизирован со всеми узлами',
+                alert_key_deleted: 'Ручной ключ удален',
                 alert_error: 'Ошибка'
             }
         };
@@ -1065,11 +1078,17 @@
                 keyDiv.style.padding = '15px';
                 keyDiv.style.background = 'white';
                 keyDiv.style.borderRadius = '5px';
-                keyDiv.style.borderLeft = '4px solid #667eea';
+                keyDiv.style.borderLeft = key.manual ? '4px solid #e74c3c' : '4px solid #667eea';
+
+                const deleteButton = key.manual ? `
+                    <button class="btn btn-danger" style="margin-top: 10px; margin-left: 10px; font-size: 12px;" onclick="deleteManualKey(${key.key_id}, ${id})">
+                        ${translations[currentLang].btn_delete || 'Delete'}
+                    </button>
+                ` : '';
 
                 keyDiv.innerHTML = `
-                    <div style="font-weight: 600; color: #667eea; margin-bottom: 10px;">
-                        ${key.node_name}
+                    <div style="font-weight: 600; color: ${key.manual ? '#e74c3c' : '#667eea'}; margin-bottom: 10px;">
+                        ${key.node_name}${key.manual ? ' (Manual)' : ''}
                     </div>
                     <div style="font-family: monospace; font-size: 11px; word-break: break-all; color: #333; background: #f8f9fa; padding: 10px; border-radius: 3px;">
                         ${key.vless_url}
@@ -1077,6 +1096,7 @@
                     <button class="btn btn-primary" style="margin-top: 10px; font-size: 12px;" onclick="copyToClipboard('${key.vless_url.replace(/'/g, "\\'")}')">
                         ${translations[currentLang].btn_copy || 'Copy'}
                     </button>
+                    ${deleteButton}
                 `;
 
                 keysList.appendChild(keyDiv);
@@ -1087,6 +1107,29 @@
 
         function closeKeysModal() {
             document.getElementById('keysModal').classList.remove('active');
+        }
+
+        async function deleteManualKey(keyId, clientId) {
+            if (!confirm(translations[currentLang].confirm_delete_key || 'Delete this manual key?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/keys/${keyId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    // Reload the keys modal
+                    showKeys(clientId);
+                    alert(translations[currentLang].alert_key_deleted || 'Manual key deleted');
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
         }
 
         function copyToClipboard(text) {

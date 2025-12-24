@@ -187,13 +187,15 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
         if existing_key:
             existing_key.uuid = client_uuid
             existing_key.vless_url = vless_url
+            existing_key.manual = False  # Mark as auto-generated
         else:
             new_key = Key(
                 client_id=client.id,
                 node_id=node.id,
                 inbound_id=inbound_id,
                 uuid=client_uuid,
-                vless_url=vless_url
+                vless_url=vless_url,
+                manual=False  # Mark as auto-generated
             )
             db.add(new_key)
 
@@ -504,8 +506,11 @@ async def create_node(
     failed_count = 0
 
     for client in clients:
-        # Find client's UUID from existing keys
-        existing_key = db.query(Key).filter(Key.client_id == client.id).first()
+        # Find client's UUID from existing auto-generated keys (skip manual keys)
+        existing_key = db.query(Key).filter(
+            Key.client_id == client.id,
+            Key.manual == False
+        ).first()
         if existing_key:
             # Use the same UUID as other nodes
             client_uuid = existing_key.vless_url.split('://')[1].split('@')[0]
@@ -717,6 +722,7 @@ async def get_clients(request: Request, db: Session = Depends(get_db)):
 async def create_client(
     request: Request,
     email: str = Form(...),
+    manual_keys: str = Form(default=""),
     db: Session = Depends(get_db)
 ):
     """Create new client and sync to all nodes"""
@@ -736,7 +742,7 @@ async def create_client(
     # Generate UUID for this client
     client_uuid = uuid.uuid4()
 
-    # Sync to all enabled nodes
+    # Sync to all enabled nodes (auto-generated keys)
     nodes = db.query(Node).filter(Node.enabled == True).all()
     results = []
 
@@ -748,10 +754,54 @@ async def create_client(
             "message": message
         })
 
+    # Process manual keys if provided
+    manual_results = []
+    if manual_keys and manual_keys.strip():
+        lines = [line.strip() for line in manual_keys.strip().split('\n') if line.strip()]
+        for line in lines:
+            # Validate VLESS URL format
+            if not line.startswith('vless://'):
+                manual_results.append({
+                    "key": line[:50] + "...",
+                    "success": False,
+                    "message": "Invalid VLESS URL format"
+                })
+                continue
+
+            # Extract node name from URL if possible (after @ symbol and before :)
+            try:
+                # Parse node name from VLESS URL (e.g., vless://uuid@domain:port)
+                node_name = "Manual"
+                if '@' in line:
+                    parts = line.split('@')[1].split(':')[0].split('?')[0]
+                    node_name = parts
+            except:
+                node_name = "Manual"
+
+            # Create manual key entry with dummy node_id (0 for manual keys)
+            key = Key(
+                client_id=client.id,
+                node_id=0,  # 0 indicates manual key (no associated node)
+                inbound_id=0,
+                uuid=client_uuid,
+                vless_url=line,
+                manual=True
+            )
+            db.add(key)
+            manual_results.append({
+                "key": node_name,
+                "success": True,
+                "message": "Manual key added"
+            })
+
+        db.commit()
+
     return {
         "id": client.id,
         "email": client.email,
-        "sync_results": results
+        "sync_results": results,
+        "manual_keys_added": len(manual_results),
+        "manual_results": manual_results
     }
 
 
@@ -979,14 +1029,35 @@ async def get_client_keys(request: Request, client_id: int, db: Session = Depend
     for key in keys:
         node = db.query(Node).filter(Node.id == key.node_id).first()
         keys_details.append({
-            "node_name": node.name if node else "Unknown",
-            "vless_url": key.vless_url
+            "key_id": key.id,
+            "node_name": node.name if node else "Manual",
+            "vless_url": key.vless_url,
+            "manual": key.manual
         })
 
     return {
         "email": client.email,
         "keys": keys_details
     }
+
+
+@app.delete("/api/keys/{key_id}")
+async def delete_key(request: Request, key_id: int, db: Session = Depends(get_db)):
+    """Delete a specific key (only manual keys can be deleted this way)"""
+    check_auth(request)
+
+    key = db.query(Key).filter(Key.id == key_id).first()
+    if not key:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    # Only allow deletion of manual keys
+    if not key.manual:
+        raise HTTPException(status_code=400, detail="Only manual keys can be deleted individually")
+
+    db.delete(key)
+    db.commit()
+
+    return {"message": "Key deleted successfully"}
 
 
 if __name__ == "__main__":
