@@ -152,7 +152,7 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                         "id": str(client_uuid),
                         "flow": "",
                         "email": client.email,
-                        "limitIp": 0,
+                        "limitIp": 3,  # Limit to 3 concurrent devices
                         "totalGB": 0,
                         "expiryTime": 0,
                         "enable": client.enabled,
