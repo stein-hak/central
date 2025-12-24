@@ -253,7 +253,23 @@
             background: rgba(255,255,255,0.4);
             border-color: rgba(255,255,255,0.6);
         }
+
+        #qrcode {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+        }
+
+        #qrcode canvas {
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            padding: 10px;
+        }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
     <div class="header">
@@ -415,6 +431,8 @@
     <div id="subModal" class="modal">
         <div class="modal-content">
             <div class="modal-header" data-i18n="modal_title">Subscription Link</div>
+            <div id="qrcode"></div>
+            <p style="text-align: center; color: #7f8c8d; font-size: 13px; margin-bottom: 15px;" data-i18n="scan_instruction">Scan QR code with VPN app or copy link below</p>
             <div class="sub-link" id="subLink"></div>
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="closeSubModal()" data-i18n="btn_close">Close</button>
@@ -474,6 +492,7 @@
                 th_keys: 'Keys',
                 th_created: 'Created',
                 modal_title: 'Subscription Link',
+                scan_instruction: 'Scan QR code with VPN app or copy link below',
                 btn_close: 'Close',
                 btn_test: 'Test',
                 btn_edit: 'Edit',
@@ -529,6 +548,7 @@
                 th_keys: 'Ключи',
                 th_created: 'Создан',
                 modal_title: 'Ссылка на подписку',
+                scan_instruction: 'Сканируйте QR код VPN приложением или скопируйте ссылку ниже',
                 btn_close: 'Закрыть',
                 btn_test: 'Тест',
                 btn_edit: 'Изменить',
@@ -984,11 +1004,28 @@
             const data = await response.json();
 
             document.getElementById('subLink').textContent = data.subscription_url;
+
+            // Clear previous QR code
+            const qrcodeDiv = document.getElementById('qrcode');
+            qrcodeDiv.innerHTML = '';
+
+            // Generate new QR code
+            new QRCode(qrcodeDiv, {
+                text: data.subscription_url,
+                width: 256,
+                height: 256,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.H
+            });
+
             document.getElementById('subModal').classList.add('active');
         }
 
         function closeSubModal() {
             document.getElementById('subModal').classList.remove('active');
+            // Clear QR code when closing
+            document.getElementById('qrcode').innerHTML = '';
         }
 
         // Initial load
