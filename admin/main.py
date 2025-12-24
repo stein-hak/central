@@ -510,23 +510,13 @@ async def create_node(
             # Use the same UUID as other nodes
             client_uuid = existing_key.vless_url.split('://')[1].split('@')[0]
 
+            # sync_client_to_node already saves the key to database
             success, vless_url = sync_client_to_node(node, client, client_uuid, db)
 
             if success:
-                # Save key to database
-                key = Key(
-                    client_id=client.id,
-                    node_id=node.id,
-                    inbound_id=1,  # VLESS-gRPC-Local inbound
-                    uuid=client_uuid,
-                    vless_url=vless_url
-                )
-                db.add(key)
                 synced_count += 1
             else:
                 failed_count += 1
-
-    db.commit()
 
     return {
         "id": node.id,
@@ -969,6 +959,33 @@ async def get_client_subscription_link(request: Request, client_id: int, db: Ses
 
     return {
         "subscription_url": f"{sub_url}/{client.email}"
+    }
+
+
+@app.get("/api/clients/{client_id}/keys")
+async def get_client_keys(request: Request, client_id: int, db: Session = Depends(get_db)):
+    """Get all VLESS keys for client"""
+    check_auth(request)
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Get all keys for this client
+    keys = db.query(Key).filter(Key.client_id == client_id).all()
+
+    # Get node names for each key
+    keys_details = []
+    for key in keys:
+        node = db.query(Node).filter(Node.id == key.node_id).first()
+        keys_details.append({
+            "node_name": node.name if node else "Unknown",
+            "vless_url": key.vless_url
+        })
+
+    return {
+        "email": client.email,
+        "keys": keys_details
     }
 
 

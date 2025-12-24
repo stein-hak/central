@@ -455,6 +455,19 @@
         </div>
     </div>
 
+    <!-- View Keys Modal -->
+    <div id="keysModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header" data-i18n="keys_modal_title">VLESS Keys</div>
+            <p style="color: #7f8c8d; margin-bottom: 15px;"><strong data-i18n="client_label">Client:</strong> <span id="keysClientEmail"></span></p>
+            <div id="keysList" style="background: #ecf0f1; padding: 15px; border-radius: 5px; max-height: 500px; overflow-y: auto;">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeKeysModal()" data-i18n="btn_close">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const translations = {
@@ -507,6 +520,9 @@
                 btn_disable: 'Disable',
                 edit_node: 'Edit Node',
                 btn_sub_link: 'Sub Link',
+                btn_view_keys: 'View Keys',
+                keys_modal_title: 'VLESS Keys',
+                client_label: 'Client',
                 status_enabled: 'Enabled',
                 status_disabled: 'Disabled',
                 confirm_delete_node: 'Delete this node?',
@@ -563,6 +579,9 @@
                 btn_disable: 'Отключить',
                 edit_node: 'Редактировать узел',
                 btn_sub_link: 'Подписка',
+                btn_view_keys: 'Просмотр ключей',
+                keys_modal_title: 'VLESS ключи',
+                client_label: 'Клиент',
                 status_enabled: 'Включен',
                 status_disabled: 'Отключен',
                 confirm_delete_node: 'Удалить этот узел?',
@@ -826,6 +845,7 @@
                             : `<button class="btn btn-success" onclick="enableClient(${client.id})">${translations[currentLang].btn_enable}</button>`
                         }
                         <button class="btn btn-primary" onclick="showSubscription(${client.id})">${translations[currentLang].btn_sub_link}</button>
+                        <button class="btn" style="background: #3498db; color: white;" onclick="showKeys(${client.id})">${translations[currentLang].btn_view_keys}</button>
                         <button class="btn btn-danger" onclick="deleteClient(${client.id})">${translations[currentLang].btn_delete}</button>
                     </td>
                 `;
@@ -1026,6 +1046,52 @@
             document.getElementById('subModal').classList.remove('active');
             // Clear QR code when closing
             document.getElementById('qrcode').innerHTML = '';
+        }
+
+        // Show keys
+        async function showKeys(id) {
+            const response = await fetch(`/api/clients/${id}/keys`);
+            const data = await response.json();
+
+            document.getElementById('keysClientEmail').textContent = data.email;
+
+            // Build keys list HTML
+            const keysList = document.getElementById('keysList');
+            keysList.innerHTML = '';
+
+            data.keys.forEach((key, index) => {
+                const keyDiv = document.createElement('div');
+                keyDiv.style.marginBottom = '20px';
+                keyDiv.style.padding = '15px';
+                keyDiv.style.background = 'white';
+                keyDiv.style.borderRadius = '5px';
+                keyDiv.style.borderLeft = '4px solid #667eea';
+
+                keyDiv.innerHTML = `
+                    <div style="font-weight: 600; color: #667eea; margin-bottom: 10px;">
+                        ${key.node_name}
+                    </div>
+                    <div style="font-family: monospace; font-size: 11px; word-break: break-all; color: #333; background: #f8f9fa; padding: 10px; border-radius: 3px;">
+                        ${key.vless_url}
+                    </div>
+                    <button class="btn btn-primary" style="margin-top: 10px; font-size: 12px;" onclick="copyToClipboard('${key.vless_url.replace(/'/g, "\\'")}')">
+                        ${translations[currentLang].btn_copy || 'Copy'}
+                    </button>
+                `;
+
+                keysList.appendChild(keyDiv);
+            });
+
+            document.getElementById('keysModal').classList.add('active');
+        }
+
+        function closeKeysModal() {
+            document.getElementById('keysModal').classList.remove('active');
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            alert('Copied to clipboard!');
         }
 
         // Initial load
