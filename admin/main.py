@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import time
+import secrets
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -787,9 +788,12 @@ async def batch_create_clients(
     subscription_base_url = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
 
     for i in range(count):
-        email = f"{seed}{i}"
+        # Generate random hex suffix to prevent account enumeration
+        # Example: client-a3f9b2e1, client-7d2c8f4a
+        random_suffix = secrets.token_hex(4)  # 8 hex characters
+        email = f"{seed}-{random_suffix}"
 
-        # Skip if already exists
+        # Skip if already exists (very unlikely with random hex)
         existing = db.query(Client).filter(Client.email == email).first()
         if existing:
             failed_count += 1

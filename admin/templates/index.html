@@ -348,7 +348,7 @@
                         <label data-i18n="client_count">Count</label>
                         <input type="number" name="count" required min="1" max="100" placeholder="20" value="20">
                     </div>
-                    <p style="color: #7f8c8d; font-size: 13px;" data-i18n="batch_example">Example: "Client" + 20 = Client0, Client1, ..., Client19</p>
+                    <p style="color: #7f8c8d; font-size: 13px;" data-i18n="batch_example">Example: "client" + 20 = client-a3f9b2e1, client-7d2c8f4a, ... (random)</p>
                     <button type="submit" class="btn btn-primary" data-i18n="btn_batch_create">Batch Create</button>
                 </form>
             </div>
@@ -466,7 +466,7 @@
                 batch_create: 'Batch Create Clients',
                 client_seed: 'Client Name Seed',
                 client_count: 'Count',
-                batch_example: 'Example: "Client" + 20 = Client0, Client1, ..., Client19',
+                batch_example: 'Example: "client" + 20 = client-a3f9b2e1, client-7d2c8f4a, ... (random)',
                 btn_batch_create: 'Batch Create',
                 clients_list: 'Clients',
                 search_clients: 'Search by email...',
@@ -521,7 +521,7 @@
                 batch_create: 'Массовое создание клиентов',
                 client_seed: 'Базовое имя клиента',
                 client_count: 'Количество',
-                batch_example: 'Пример: "Client" + 20 = Client0, Client1, ..., Client19',
+                batch_example: 'Пример: "client" + 20 = client-a3f9b2e1, client-7d2c8f4a, ... (случайные)',
                 btn_batch_create: 'Создать пакетом',
                 clients_list: 'Клиенты',
                 search_clients: 'Поиск по email...',
@@ -859,7 +859,7 @@
             const seed = formData.get('seed');
             const count = parseInt(formData.get('count'));
 
-            if (!confirm(`Create ${count} clients: ${seed}0, ${seed}1, ..., ${seed}${count-1}?`)) {
+            if (!confirm(`Create ${count} clients with random suffixes?\nExample: ${seed}-a3f9b2e1, ${seed}-7d2c8f4a, ...`)) {
                 return;
             }
 
