@@ -899,6 +899,56 @@ async def delete_client(request: Request, client_id: int, db: Session = Depends(
     return {"message": "Client deleted", "sync_results": results}
 
 
+@app.post("/api/clients/batch-delete")
+async def batch_delete_clients(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Batch delete multiple clients from all nodes"""
+    check_auth(request)
+
+    # Get JSON body
+    body = await request.json()
+    client_ids = body.get("client_ids", [])
+
+    if not client_ids:
+        raise HTTPException(status_code=400, detail="No client IDs provided")
+
+    deleted_count = 0
+    keys_removed = 0
+
+    # Get all enabled nodes
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+
+    for client_id in client_ids:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            continue
+
+        # Count keys before deletion
+        keys_count = db.query(Key).filter(Key.client_id == client_id).count()
+        keys_removed += keys_count
+
+        # Delete from all nodes
+        for node in nodes:
+            try:
+                delete_client_from_node(node, client, db)
+            except Exception:
+                # Continue even if node deletion fails
+                pass
+
+        # Delete from database
+        db.delete(client)
+        deleted_count += 1
+
+    db.commit()
+
+    return {
+        "deleted": deleted_count,
+        "keys_removed": keys_removed
+    }
+
+
 @app.get("/api/clients/{client_id}/subscription")
 async def get_client_subscription_link(request: Request, client_id: int, db: Session = Depends(get_db)):
     """Get subscription link for client"""

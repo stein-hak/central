@@ -355,12 +355,14 @@
 
             <div class="card">
                 <h2 data-i18n="clients_list">Clients</h2>
-                <div class="form-group">
-                    <input type="text" id="clientSearch" data-i18n-placeholder="search_clients" placeholder="Search by email..." style="width: 100%; max-width: 400px;">
+                <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+                    <input type="text" id="clientSearch" data-i18n-placeholder="search_clients" placeholder="Search by email..." style="flex: 1; max-width: 400px;">
+                    <button id="batchDeleteBtn" class="btn btn-danger" onclick="batchDeleteClients()" style="display: none;" data-i18n="btn_delete_selected">Delete Selected</button>
                 </div>
                 <table id="clientsTable">
                     <thead>
                         <tr>
+                            <th style="width: 40px;"><input type="checkbox" id="selectAllClients" onchange="toggleSelectAll()"></th>
                             <th data-i18n="th_email">Email</th>
                             <th data-i18n="th_status">Status</th>
                             <th data-i18n="th_keys">Keys</th>
@@ -481,6 +483,7 @@
                 batch_subs_title: 'Batch Subscription Links',
                 batch_subs_desc: 'Copy these subscription URLs and distribute to clients:',
                 btn_delete: 'Delete',
+                btn_delete_selected: 'Delete Selected',
                 btn_enable: 'Enable',
                 btn_disable: 'Disable',
                 edit_node: 'Edit Node',
@@ -535,6 +538,7 @@
                 batch_subs_title: 'Список ссылок на подписки',
                 batch_subs_desc: 'Скопируйте эти URL подписок и раздайте клиентам:',
                 btn_delete: 'Удалить',
+                btn_delete_selected: 'Удалить выбранное',
                 btn_enable: 'Включить',
                 btn_disable: 'Отключить',
                 edit_node: 'Редактировать узел',
@@ -788,8 +792,10 @@
 
                 // Add data attribute for searching
                 tr.setAttribute('data-email', client.email.toLowerCase());
+                tr.setAttribute('data-client-id', client.id);
 
                 tr.innerHTML = `
+                    <td><input type="checkbox" class="client-checkbox" value="${client.id}" onchange="updateBatchDeleteBtn()"></td>
                     <td>${client.email}</td>
                     <td><span class="badge badge-${client.enabled ? 'success' : 'danger'}">${statusText}</span></td>
                     <td>${client.keys_count}</td>
@@ -805,6 +811,9 @@
                 `;
                 tbody.appendChild(tr);
             });
+
+            // Reset batch delete button
+            updateBatchDeleteBtn();
         }
 
         // Client search filter
@@ -887,6 +896,59 @@
             const text = document.getElementById('batchSubsList').textContent;
             navigator.clipboard.writeText(text);
             alert('Copied to clipboard!');
+        }
+
+        // Batch delete functions
+        function toggleSelectAll() {
+            const selectAll = document.getElementById('selectAllClients');
+            const checkboxes = document.querySelectorAll('.client-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = selectAll.checked;
+            });
+            updateBatchDeleteBtn();
+        }
+
+        function updateBatchDeleteBtn() {
+            const checkboxes = document.querySelectorAll('.client-checkbox:checked');
+            const btn = document.getElementById('batchDeleteBtn');
+
+            if (checkboxes.length > 0) {
+                btn.style.display = 'block';
+                btn.textContent = `${translations[currentLang].btn_delete_selected} (${checkboxes.length})`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        async function batchDeleteClients() {
+            const checkboxes = document.querySelectorAll('.client-checkbox:checked');
+            const clientIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+
+            if (clientIds.length === 0) return;
+
+            if (!confirm(`Delete ${clientIds.length} clients? This will remove them from all nodes.`)) {
+                return;
+            }
+
+            const response = await fetch('/api/clients/batch-delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({client_ids: clientIds})
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(`Batch deletion complete!\n` +
+                    `Deleted: ${data.deleted}\n` +
+                    `Total keys removed: ${data.keys_removed}`);
+
+                // Uncheck select all
+                document.getElementById('selectAllClients').checked = false;
+
+                loadClients();
+            } else {
+                alert('Error deleting clients');
+            }
         }
 
         // Enable client
