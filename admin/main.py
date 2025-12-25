@@ -1041,6 +1041,83 @@ async def get_client_keys(request: Request, client_id: int, db: Session = Depend
     }
 
 
+@app.post("/api/clients/{client_id}/keys")
+async def add_manual_keys(
+    request: Request,
+    client_id: int,
+    manual_keys: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Add manual keys to an existing client"""
+    check_auth(request)
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Get client's UUID from existing keys
+    existing_key = db.query(Key).filter(
+        Key.client_id == client.id,
+        Key.manual == False
+    ).first()
+
+    # Use existing UUID or generate new one
+    if existing_key:
+        client_uuid = existing_key.uuid
+    else:
+        client_uuid = uuid.uuid4()
+
+    # Process manual keys
+    manual_results = []
+    added_count = 0
+
+    if manual_keys and manual_keys.strip():
+        lines = [line.strip() for line in manual_keys.strip().split('\n') if line.strip()]
+        for line in lines:
+            # Validate VLESS URL format
+            if not line.startswith('vless://'):
+                manual_results.append({
+                    "key": line[:50] + "...",
+                    "success": False,
+                    "message": "Invalid VLESS URL format"
+                })
+                continue
+
+            # Extract node name from URL if possible
+            try:
+                node_name = "Manual"
+                if '@' in line:
+                    parts = line.split('@')[1].split(':')[0].split('?')[0]
+                    node_name = parts
+            except:
+                node_name = "Manual"
+
+            # Create manual key entry
+            key = Key(
+                client_id=client.id,
+                node_id=0,  # 0 indicates manual key
+                inbound_id=0,
+                uuid=client_uuid,
+                vless_url=line,
+                manual=True
+            )
+            db.add(key)
+            added_count += 1
+            manual_results.append({
+                "key": node_name,
+                "success": True,
+                "message": "Manual key added"
+            })
+
+        db.commit()
+
+    return {
+        "client_id": client.id,
+        "added_count": added_count,
+        "results": manual_results
+    }
+
+
 @app.delete("/api/keys/{key_id}")
 async def delete_key(request: Request, key_id: int, db: Session = Depends(get_db)):
     """Delete a specific key (only manual keys can be deleted this way)"""

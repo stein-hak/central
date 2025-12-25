@@ -467,6 +467,20 @@
             <p style="color: #7f8c8d; margin-bottom: 15px;"><strong data-i18n="client_label">Client:</strong> <span id="keysClientEmail"></span></p>
             <div id="keysList" style="background: #ecf0f1; padding: 15px; border-radius: 5px; max-height: 500px; overflow-y: auto;">
             </div>
+
+            <!-- Add Manual Keys Section -->
+            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 5px; border-left: 4px solid #ffc107;">
+                <h3 style="margin-top: 0; font-size: 16px; color: #856404;" data-i18n="add_manual_keys_title">Add Manual Keys</h3>
+                <form id="addManualKeysForm" onsubmit="addManualKeys(event)">
+                    <input type="hidden" id="manualKeysClientId" name="client_id">
+                    <div class="form-group" style="margin-bottom: 10px;">
+                        <textarea name="manual_keys" rows="3" placeholder="vless://uuid@domain:port?...&#10;(One key per line)" style="font-family: monospace; font-size: 12px; width: 100%;"></textarea>
+                        <small style="color: #856404; display: block; margin-top: 5px;" data-i18n="add_manual_keys_help">Paste VLESS URLs (one per line). These keys won't be deleted when nodes are removed.</small>
+                    </div>
+                    <button type="submit" class="btn" style="background: #ffc107; color: #000; font-size: 13px;" data-i18n="btn_add_keys">Add Keys</button>
+                </form>
+            </div>
+
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="closeKeysModal()" data-i18n="btn_close">Close</button>
             </div>
@@ -529,6 +543,9 @@
                 btn_sub_link: 'Sub Link',
                 btn_view_keys: 'View Keys',
                 keys_modal_title: 'VLESS Keys',
+                add_manual_keys_title: 'Add Manual Keys',
+                add_manual_keys_help: 'Paste VLESS URLs (one per line). These keys won\'t be deleted when nodes are removed.',
+                btn_add_keys: 'Add Keys',
                 client_label: 'Client',
                 status_enabled: 'Enabled',
                 status_disabled: 'Disabled',
@@ -537,6 +554,7 @@
                 confirm_delete_key: 'Delete this manual key?',
                 alert_created: 'Client created and synced to all nodes',
                 alert_key_deleted: 'Manual key deleted',
+                alert_keys_added: 'keys added',
                 alert_error: 'Error'
             },
             ru: {
@@ -592,6 +610,9 @@
                 btn_sub_link: 'Подписка',
                 btn_view_keys: 'Просмотр ключей',
                 keys_modal_title: 'VLESS ключи',
+                add_manual_keys_title: 'Добавить ручные ключи',
+                add_manual_keys_help: 'Вставьте VLESS URL (один на строку). Эти ключи не будут удалены при удалении узлов.',
+                btn_add_keys: 'Добавить ключи',
                 client_label: 'Клиент',
                 status_enabled: 'Включен',
                 status_disabled: 'Отключен',
@@ -600,6 +621,7 @@
                 confirm_delete_key: 'Удалить этот ручной ключ?',
                 alert_created: 'Клиент создан и синхронизирован со всеми узлами',
                 alert_key_deleted: 'Ручной ключ удален',
+                alert_keys_added: 'ключей добавлено',
                 alert_error: 'Ошибка'
             }
         };
@@ -1067,6 +1089,7 @@
             const data = await response.json();
 
             document.getElementById('keysClientEmail').textContent = data.email;
+            document.getElementById('manualKeysClientId').value = id;
 
             // Build keys list HTML
             const keysList = document.getElementById('keysList');
@@ -1123,6 +1146,37 @@
                     // Reload the keys modal
                     showKeys(clientId);
                     alert(translations[currentLang].alert_key_deleted || 'Manual key deleted');
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function addManualKeys(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const formData = new FormData(form);
+            const clientId = document.getElementById('manualKeysClientId').value;
+
+            try {
+                const response = await fetch(`/api/clients/${clientId}/keys`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`${data.added_count} ${translations[currentLang].alert_keys_added || 'keys added'}`);
+
+                    // Clear the textarea
+                    form.querySelector('textarea[name="manual_keys"]').value = '';
+
+                    // Reload the keys modal
+                    showKeys(clientId);
                 } else {
                     const error = await response.json();
                     alert(`Error: ${error.detail}`);
