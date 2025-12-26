@@ -1045,7 +1045,7 @@ async def get_client_keys(request: Request, client_id: int, db: Session = Depend
 async def add_manual_keys(
     request: Request,
     client_id: int,
-    manual_keys: str = Form(...),
+    manual_keys: str = Form(default=""),
     db: Session = Depends(get_db)
 ):
     """Add manual keys to an existing client"""
