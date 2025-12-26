@@ -1,6 +1,7 @@
 """Subscription service - public read-only endpoint"""
 import base64
 import os
+import random
 from fastapi import FastAPI, Depends, HTTPException, Response
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
@@ -42,6 +43,11 @@ async def get_subscription(client_email: str, db: Session = Depends(get_db)):
 
     # Build subscription content (one URL per line)
     vless_urls = [key.vless_url for key in keys]
+
+    # Randomize order for load balancing across nodes
+    # This prevents all clients from defaulting to the first server
+    random.shuffle(vless_urls)
+
     subscription_content = "\n".join(vless_urls)
 
     # Encode in base64
