@@ -705,24 +705,24 @@ async def update_node(
     db.commit()
     db.refresh(node)
 
-    # If node name changed, regenerate all VLESS URLs for this node's keys
-    if name_changed:
-        keys = db.query(Key).filter(Key.node_id == node_id, Key.manual == False).all()
-        for key in keys:
-            # Extract UUID and client email from existing key
-            client = db.query(Client).filter(Client.id == key.client_id).first()
-            if client:
-                # Regenerate VLESS URL with new node name
-                # Determine transport type from existing URL
-                if "type=xhttp" in key.vless_url:
-                    transport = "xhttp"
-                else:
-                    transport = "grpc"
+    # Regenerate all VLESS URLs for this node's keys
+    # This ensures keys are always in sync with current node name/domain
+    keys = db.query(Key).filter(Key.node_id == node_id, Key.manual == False).all()
+    for key in keys:
+        # Extract UUID and client email from existing key
+        client = db.query(Client).filter(Client.id == key.client_id).first()
+        if client:
+            # Regenerate VLESS URL with current node info
+            # Determine transport type from existing URL
+            if "type=xhttp" in key.vless_url:
+                transport = "xhttp"
+            else:
+                transport = "grpc"
 
-                new_vless_url = create_vless_url(node, client.email, str(client.uuid), key.inbound_id, transport)
-                key.vless_url = new_vless_url
+            new_vless_url = create_vless_url(node, client.email, str(client.uuid), key.inbound_id, transport)
+            key.vless_url = new_vless_url
 
-        db.commit()
+    db.commit()
 
     return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
 
