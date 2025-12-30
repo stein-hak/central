@@ -1282,10 +1282,9 @@ BACKUP_DIR = "/opt/central/backups"
 
 @app.post("/api/admin/backup")
 async def create_backup(request: Request, db: Session = Depends(get_db)):
-    """Create backup of entire cluster (central DB + all nodes)"""
+    """Create backup of all node databases via API"""
     check_auth(request)
 
-    import subprocess
     from datetime import datetime
     import tarfile
 
@@ -1301,45 +1300,10 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
         results = {
             "backup_id": backup_id,
             "timestamp": datetime.now().isoformat(),
-            "central": None,
             "nodes": []
         }
 
-        # 1. Backup central PostgreSQL database
-        try:
-            central_backup_file = f"{backup_path}/central_postgres.sql"
-            cmd = f"docker compose exec -T postgres pg_dump -U postgres xui_central"
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd="/opt/central",
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode == 0:
-                with open(central_backup_file, 'w') as f:
-                    f.write(result.stdout)
-
-                file_size = os.path.getsize(central_backup_file)
-                results["central"] = {
-                    "success": True,
-                    "size": file_size,
-                    "file": "central_postgres.sql"
-                }
-            else:
-                results["central"] = {
-                    "success": False,
-                    "error": result.stderr
-                }
-        except Exception as e:
-            results["central"] = {
-                "success": False,
-                "error": str(e)
-            }
-
-        # 2. Backup all nodes via API
+        # Backup all nodes via API
         nodes = db.query(Node).all()
         for node in nodes:
             try:
@@ -1393,11 +1357,10 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
                     "error": str(e)
                 })
 
-        # 3. Create metadata file
+        # Create metadata file
         metadata = {
             "backup_id": backup_id,
             "timestamp": results["timestamp"],
-            "central_success": results["central"]["success"] if results["central"] else False,
             "nodes_backed_up": len([n for n in results["nodes"] if n["success"]]),
             "total_nodes": len(nodes),
             "results": results
@@ -1406,16 +1369,16 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
         with open(f"{backup_path}/metadata.json", 'w') as f:
             json.dump(metadata, f, indent=2)
 
-        # 4. Create compressed archive
+        # Create compressed archive
         archive_path = f"{BACKUP_DIR}/{backup_id}.tar.gz"
         with tarfile.open(archive_path, "w:gz") as tar:
             tar.add(backup_path, arcname=backup_id)
 
-        # 5. Clean up uncompressed files
+        # Clean up uncompressed files
         import shutil
         shutil.rmtree(backup_path)
 
-        # 6. Get final archive size
+        # Get final archive size
         archive_size = os.path.getsize(archive_path)
 
         return {
@@ -1424,7 +1387,6 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
             "size": archive_size,
             "timestamp": metadata["timestamp"],
             "summary": {
-                "central": results["central"]["success"] if results["central"] else False,
                 "nodes": f"{metadata['nodes_backed_up']}/{metadata['total_nodes']}"
             }
         }

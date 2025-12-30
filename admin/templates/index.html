@@ -406,9 +406,9 @@
         <!-- Backups Tab -->
         <div id="backups-tab" class="tab-content">
             <div class="card">
-                <h2 data-i18n="backups_title">Cluster Backups</h2>
+                <h2 data-i18n="backups_title">Node Backups</h2>
                 <p style="color: #7f8c8d; margin-bottom: 20px;" data-i18n="backups_description">
-                    Create and manage backups of your entire cluster (central database + all nodes)
+                    Create and manage backups of all node databases
                 </p>
 
                 <div style="display: flex; gap: 10px; margin-bottom: 20px;">
@@ -625,8 +625,8 @@
                 alert_key_deleted: 'Manual key deleted',
                 alert_keys_added: 'keys added',
                 alert_error: 'Error',
-                backups_title: 'Cluster Backups',
-                backups_description: 'Create and manage backups of your entire cluster (central database + all nodes)',
+                backups_title: 'Node Backups',
+                backups_description: 'Create and manage backups of all node databases',
                 btn_create_backup: 'Create New Backup',
                 creating_backup: 'Creating backup...',
                 last_backup: 'Last backup:',
@@ -712,8 +712,8 @@
                 alert_key_deleted: 'Ручной ключ удален',
                 alert_keys_added: 'ключей добавлено',
                 alert_error: 'Ошибка',
-                backups_title: 'Резервные копии кластера',
-                backups_description: 'Создавайте и управляйте резервными копиями всего кластера (центральная БД + все узлы)',
+                backups_title: 'Резервные копии узлов',
+                backups_description: 'Создавайте и управляйте резервными копиями баз данных узлов',
                 btn_create_backup: 'Создать новую копию',
                 creating_backup: 'Создание копии...',
                 last_backup: 'Последняя копия:',
@@ -1418,7 +1418,7 @@
         function getBackupStatus(backup) {
             if (!backup.metadata) return translations[currentLang].backup_status_ok;
             const meta = backup.metadata;
-            if (meta.central_success && meta.nodes_backed_up === meta.total_nodes) {
+            if (meta.nodes_backed_up === meta.total_nodes) {
                 return `✓ ${translations[currentLang].backup_status_ok}`;
             } else if (meta.nodes_backed_up > 0) {
                 return `⚠ ${translations[currentLang].backup_status_partial}`;
