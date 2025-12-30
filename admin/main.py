@@ -57,24 +57,43 @@ def clear_node_stats_cache(node_id: int):
 # 3x-ui API Integration
 # ============================================================================
 
-def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int) -> str:
-    """Generate VLESS URL for client"""
-    # Use public domain from node configuration
-    domain = node.domain
+def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc") -> str:
+    """Generate VLESS URL for client
 
-    # Format: vless://UUID@DOMAIN:443?encryption=none&security=tls&type=grpc&serviceName=sync#EMAIL
+    Args:
+        node: Node configuration
+        client_email: Client email
+        client_uuid: Client UUID
+        inbound_id: Inbound ID (unused, kept for compatibility)
+        transport: Transport type ('grpc' or 'xhttp')
+
+    Returns:
+        VLESS URL string
+    """
     import urllib.parse
 
-    params = {
-        "encryption": "none",
-        "security": "tls",
-        "type": "grpc",
-        "serviceName": "sync"
-    }
+    domain = node.domain
+
+    if transport == "xhttp":
+        # XHTTP transport: type=xhttp, path=/api
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "xhttp",
+            "path": "/api"
+        }
+        remark = urllib.parse.quote(f"{node.name}-XHTTP-{client_email}")
+    else:
+        # gRPC transport: type=grpc, serviceName=sync (default)
+        params = {
+            "encryption": "none",
+            "security": "tls",
+            "type": "grpc",
+            "serviceName": "sync"
+        }
+        remark = urllib.parse.quote(f"{node.name}-gRPC-{client_email}")
 
     query_string = urllib.parse.urlencode(params)
-    remark = urllib.parse.quote(f"{node.name}-{client_email}")
-
     vless_url = f"vless://{client_uuid}@{domain}:443?{query_string}#{remark}"
 
     return vless_url
@@ -201,6 +220,102 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
 
         db.commit()
 
+        # ============================================================================
+        # Try to add client to XHTTP inbound if it exists
+        # ============================================================================
+
+        xhttp_inbound = None
+        for inbound in inbounds:
+            if inbound.get("remark") == "VLESS-XHTTP":
+                xhttp_inbound = inbound
+                break
+
+        if xhttp_inbound:
+            try:
+                xhttp_inbound_id = xhttp_inbound["id"]
+                xhttp_email = f"{client.email}-xhttp"
+
+                # Check if XHTTP client already exists
+                xhttp_settings = json.loads(xhttp_inbound.get("settings", "{}"))
+                xhttp_clients_list = xhttp_settings.get("clients", [])
+
+                existing_xhttp_client = None
+                for c in xhttp_clients_list:
+                    if c.get("email") == xhttp_email:
+                        existing_xhttp_client = c
+                        break
+
+                if existing_xhttp_client:
+                    # Delete existing XHTTP client first
+                    try:
+                        session.post(
+                            f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
+                            verify=False,
+                            timeout=10
+                        )
+                    except Exception:
+                        pass  # Ignore delete errors
+
+                # Add client to XHTTP inbound
+                xhttp_client_config = {
+                    "id": xhttp_inbound_id,
+                    "settings": json.dumps({
+                        "clients": [
+                            {
+                                "id": str(client_uuid),
+                                "flow": "",
+                                "email": xhttp_email,
+                                "limitIp": 3,  # Limit to 3 concurrent devices
+                                "totalGB": 0,
+                                "expiryTime": 0,
+                                "enable": client.enabled,
+                                "tgId": "",
+                                "subId": xhttp_email
+                            }
+                        ]
+                    })
+                }
+
+                xhttp_add_response = session.post(
+                    f"{node.url}/panel/api/inbounds/addClient",
+                    json=xhttp_client_config,
+                    verify=False,
+                    timeout=10
+                )
+
+                if xhttp_add_response.status_code == 200:
+                    # Generate XHTTP VLESS URL
+                    xhttp_vless_url = create_vless_url(node, client.email, str(client_uuid), xhttp_inbound_id, transport="xhttp")
+
+                    # Save XHTTP key to database
+                    existing_xhttp_key = db.query(Key).filter(
+                        Key.client_id == client.id,
+                        Key.node_id == node.id,
+                        Key.inbound_id == xhttp_inbound_id
+                    ).first()
+
+                    if existing_xhttp_key:
+                        existing_xhttp_key.uuid = client_uuid
+                        existing_xhttp_key.vless_url = xhttp_vless_url
+                        existing_xhttp_key.manual = False
+                    else:
+                        xhttp_key = Key(
+                            client_id=client.id,
+                            node_id=node.id,
+                            inbound_id=xhttp_inbound_id,
+                            uuid=client_uuid,
+                            vless_url=xhttp_vless_url,
+                            manual=False
+                        )
+                        db.add(xhttp_key)
+
+                    db.commit()
+
+            except Exception as e:
+                # XHTTP addition failed, but gRPC succeeded - continue
+                print(f"Warning: Failed to add XHTTP key for {client.email} on {node.name}: {e}")
+                pass
+
         # Clear stats cache for this node
         clear_node_stats_cache(node.id)
 
@@ -266,6 +381,28 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
                         pass  # Client might not exist, that's okay
             except Exception as e:
                 # Even if delete fails, continue to clean database
+                pass
+
+        # Try to delete from XHTTP inbound if it exists
+        xhttp_inbound = None
+        for inbound in inbounds:
+            if inbound.get("remark") == "VLESS-XHTTP":
+                xhttp_inbound = inbound
+                break
+
+        if xhttp_inbound:
+            xhttp_inbound_id = xhttp_inbound["id"]
+            xhttp_email = f"{client.email}-xhttp"
+
+            try:
+                session.post(
+                    f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
+                    verify=False,
+                    timeout=10
+                )
+                # Ignore response - client might not exist in XHTTP inbound
+            except Exception:
+                # Ignore XHTTP delete errors
                 pass
 
         # Always delete keys from database (even if server delete failed)
