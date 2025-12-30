@@ -1321,14 +1321,17 @@
             try {
                 const response = await fetch('/api/admin/backup', { method: 'POST' });
                 const data = await response.json();
+                console.log('Backup response:', data);
 
                 if (data.success) {
                     alert(translations[currentLang].alert_backup_created);
                     loadBackups();
                 } else {
+                    console.error('Backup error:', data.error);
                     alert(`${translations[currentLang].alert_backup_error}: ${data.error}`);
                 }
             } catch (error) {
+                console.error('Request error:', error);
                 alert(`${translations[currentLang].alert_error}: ${error.message}`);
             } finally {
                 btn.disabled = false;
@@ -1340,6 +1343,7 @@
             try {
                 const response = await fetch('/api/admin/backups');
                 const data = await response.json();
+                console.log('Backups list:', data);
 
                 // Update statistics
                 const backups = data.backups || [];
@@ -1370,6 +1374,7 @@
                 backups.forEach(backup => {
                     const row = document.createElement('tr');
                     const status = getBackupStatus(backup);
+                    console.log('Backup status for', backup.backup_id, ':', status, 'metadata:', backup.metadata);
 
                     row.innerHTML = `
                         <td>${formatDate(backup.created)}</td>
