@@ -689,11 +689,13 @@ async def update_node(
         raise HTTPException(status_code=404, detail="Node not found")
 
     # Check if name is being changed and conflicts
-    if node.name != name:
+    name_changed = (node.name != name)
+    if name_changed:
         existing = db.query(Node).filter(Node.name == name).first()
         if existing:
             raise HTTPException(status_code=400, detail="Node name already exists")
 
+    old_name = node.name
     node.name = name
     node.url = url.rstrip('/')
     node.domain = domain
@@ -702,6 +704,25 @@ async def update_node(
 
     db.commit()
     db.refresh(node)
+
+    # If node name changed, regenerate all VLESS URLs for this node's keys
+    if name_changed:
+        keys = db.query(Key).filter(Key.node_id == node_id, Key.manual == False).all()
+        for key in keys:
+            # Extract UUID and client email from existing key
+            client = db.query(Client).filter(Client.id == key.client_id).first()
+            if client:
+                # Regenerate VLESS URL with new node name
+                # Determine transport type from existing URL
+                if "type=xhttp" in key.vless_url:
+                    transport = "xhttp"
+                else:
+                    transport = "grpc"
+
+                new_vless_url = create_vless_url(node, client.email, str(client.uuid), key.inbound_id, transport)
+                key.vless_url = new_vless_url
+
+        db.commit()
 
     return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
 

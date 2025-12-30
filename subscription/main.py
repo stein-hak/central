@@ -42,11 +42,52 @@ async def get_subscription(client_email: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No keys found for client")
 
     # Build subscription content (one URL per line)
-    vless_urls = [key.vless_url for key in keys]
+    # Group keys by country, XHTTP first within each group, then randomize groups
 
-    # Randomize order for load balancing across nodes
-    # This prevents all clients from defaulting to the first server
-    random.shuffle(vless_urls)
+    # Extract remark from VLESS URL for grouping
+    def get_remark_from_url(vless_url):
+        """Extract remark from vless://...#remark"""
+        if '#' in vless_url:
+            return vless_url.split('#')[-1]
+        return ""
+
+    def get_country_from_remark(remark):
+        """Extract country/node name from remark (before -gRPC or -XHTTP)"""
+        # Remark format: "NodeName-gRPC-email" or "NodeName-XHTTP-email"
+        # Extract just the node name part
+        if '-gRPC-' in remark:
+            return remark.split('-gRPC-')[0]
+        elif '-XHTTP-' in remark:
+            return remark.split('-XHTTP-')[0]
+        # Fallback: return first part before any dash
+        return remark.split('-')[0] if '-' in remark else remark
+
+    def is_xhttp(vless_url):
+        """Check if URL is XHTTP transport"""
+        return 'type=xhttp' in vless_url
+
+    # Group keys by country
+    country_groups = {}
+    for key in keys:
+        remark = get_remark_from_url(key.vless_url)
+        country = get_country_from_remark(remark)
+
+        if country not in country_groups:
+            country_groups[country] = []
+        country_groups[country].append(key.vless_url)
+
+    # Sort within each country group: XHTTP first, then gRPC
+    for country in country_groups:
+        country_groups[country].sort(key=lambda url: (not is_xhttp(url), url))
+
+    # Get country names and randomize group order
+    countries = list(country_groups.keys())
+    random.shuffle(countries)
+
+    # Flatten groups in randomized order
+    vless_urls = []
+    for country in countries:
+        vless_urls.extend(country_groups[country])
 
     subscription_content = "\n".join(vless_urls)
 
