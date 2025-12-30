@@ -268,6 +268,11 @@
             border-radius: 8px;
             padding: 10px;
         }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
@@ -289,6 +294,7 @@
         <div class="tabs">
             <button class="tab active" onclick="switchTab('nodes')" data-i18n="tab_nodes">Nodes</button>
             <button class="tab" onclick="switchTab('clients')" data-i18n="tab_clients">Clients</button>
+            <button class="tab" onclick="switchTab('backups')" data-i18n="tab_backups">Backups</button>
         </div>
 
         <!-- Nodes Tab -->
@@ -388,6 +394,56 @@
                             <th data-i18n="th_status">Status</th>
                             <th data-i18n="th_keys">Keys</th>
                             <th data-i18n="th_created">Created</th>
+                            <th data-i18n="th_actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Backups Tab -->
+        <div id="backups-tab" class="tab-content">
+            <div class="card">
+                <h2 data-i18n="backups_title">Cluster Backups</h2>
+                <p style="color: #7f8c8d; margin-bottom: 20px;" data-i18n="backups_description">
+                    Create and manage backups of your entire cluster (central database + all nodes)
+                </p>
+
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="createBackup()" id="createBackupBtn" data-i18n="btn_create_backup">
+                        Create New Backup
+                    </button>
+                    <div id="backupProgress" style="display: none; align-items: center; gap: 10px;">
+                        <div style="width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                        <span data-i18n="creating_backup">Creating backup...</span>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong data-i18n="last_backup">Last backup:</strong>
+                            <span id="lastBackupTime">-</span>
+                        </div>
+                        <div>
+                            <strong data-i18n="total_backups">Total backups:</strong>
+                            <span id="totalBackups">0</span>
+                            <span style="margin-left: 20px;">
+                                <strong data-i18n="total_size">Total size:</strong>
+                                <span id="totalSize">0 MB</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <table id="backupsTable">
+                    <thead>
+                        <tr>
+                            <th data-i18n="th_backup_date">Date/Time</th>
+                            <th data-i18n="th_backup_size">Size</th>
+                            <th data-i18n="th_backup_status">Status</th>
                             <th data-i18n="th_actions">Actions</th>
                         </tr>
                     </thead>
@@ -507,6 +563,7 @@
                 logout: 'Logout',
                 tab_nodes: 'Nodes',
                 tab_clients: 'Clients',
+                tab_backups: 'Backups',
                 add_node: 'Add New Node',
                 node_name: 'Node Name',
                 panel_url: 'API URL (Tailscale)',
@@ -567,13 +624,33 @@
                 alert_created: 'Client created and synced to all nodes',
                 alert_key_deleted: 'Manual key deleted',
                 alert_keys_added: 'keys added',
-                alert_error: 'Error'
+                alert_error: 'Error',
+                backups_title: 'Cluster Backups',
+                backups_description: 'Create and manage backups of your entire cluster (central database + all nodes)',
+                btn_create_backup: 'Create New Backup',
+                creating_backup: 'Creating backup...',
+                last_backup: 'Last backup:',
+                total_backups: 'Total backups:',
+                total_size: 'Total size:',
+                th_backup_date: 'Date/Time',
+                th_backup_size: 'Size',
+                th_backup_status: 'Status',
+                btn_download: 'Download',
+                btn_delete_backup: 'Delete',
+                confirm_delete_backup: 'Delete this backup?',
+                backup_status_ok: 'OK',
+                backup_status_partial: 'Partial',
+                backup_status_failed: 'Failed',
+                alert_backup_created: 'Backup created successfully',
+                alert_backup_deleted: 'Backup deleted',
+                alert_backup_error: 'Backup failed'
             },
             ru: {
                 title: 'Менеджер подписок',
                 logout: 'Выход',
                 tab_nodes: 'Узлы',
                 tab_clients: 'Клиенты',
+                tab_backups: 'Резервные копии',
                 add_node: 'Добавить новый узел',
                 node_name: 'Имя узла',
                 panel_url: 'API URL (Tailscale)',
@@ -634,7 +711,26 @@
                 alert_created: 'Клиент создан и синхронизирован со всеми узлами',
                 alert_key_deleted: 'Ручной ключ удален',
                 alert_keys_added: 'ключей добавлено',
-                alert_error: 'Ошибка'
+                alert_error: 'Ошибка',
+                backups_title: 'Резервные копии кластера',
+                backups_description: 'Создавайте и управляйте резервными копиями всего кластера (центральная БД + все узлы)',
+                btn_create_backup: 'Создать новую копию',
+                creating_backup: 'Создание копии...',
+                last_backup: 'Последняя копия:',
+                total_backups: 'Всего копий:',
+                total_size: 'Общий размер:',
+                th_backup_date: 'Дата/Время',
+                th_backup_size: 'Размер',
+                th_backup_status: 'Статус',
+                btn_download: 'Скачать',
+                btn_delete_backup: 'Удалить',
+                confirm_delete_backup: 'Удалить эту копию?',
+                backup_status_ok: 'ОК',
+                backup_status_partial: 'Частичная',
+                backup_status_failed: 'Ошибка',
+                alert_backup_created: 'Резервная копия создана',
+                alert_backup_deleted: 'Резервная копия удалена',
+                alert_backup_error: 'Ошибка создания копии'
             }
         };
 
@@ -692,6 +788,7 @@
 
             if (tab === 'nodes') loadNodes();
             if (tab === 'clients') loadClients();
+            if (tab === 'backups') loadBackups();
         }
 
         // Load nodes
@@ -1211,6 +1308,123 @@
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text);
             alert('Copied to clipboard!');
+        }
+
+        // Backup Management Functions
+        async function createBackup() {
+            const btn = document.getElementById('createBackupBtn');
+            const progress = document.getElementById('backupProgress');
+
+            btn.disabled = true;
+            progress.style.display = 'flex';
+
+            try {
+                const response = await fetch('/api/admin/backup', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(translations[currentLang].alert_backup_created);
+                    loadBackups();
+                } else {
+                    alert(`${translations[currentLang].alert_backup_error}: ${data.error}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                progress.style.display = 'none';
+            }
+        }
+
+        async function loadBackups() {
+            try {
+                const response = await fetch('/api/admin/backups');
+                const data = await response.json();
+
+                // Update statistics
+                const backups = data.backups || [];
+                const totalBackupsEl = document.getElementById('totalBackups');
+                if (totalBackupsEl) {
+                    totalBackupsEl.textContent = backups.length;
+                }
+
+                if (backups.length > 0) {
+                    const totalSize = backups.reduce((sum, b) => sum + b.size, 0);
+                    const totalSizeEl = document.getElementById('totalSize');
+                    const lastBackupTimeEl = document.getElementById('lastBackupTime');
+
+                    if (totalSizeEl) {
+                        totalSizeEl.textContent = formatSize(totalSize);
+                    }
+                    if (lastBackupTimeEl) {
+                        lastBackupTimeEl.textContent = formatDate(backups[0].created);
+                    }
+                }
+
+                // Populate table
+                const tbody = document.querySelector('#backupsTable tbody');
+                if (!tbody) return;
+
+                tbody.innerHTML = '';
+
+                backups.forEach(backup => {
+                    const row = document.createElement('tr');
+                    const status = getBackupStatus(backup);
+
+                    row.innerHTML = `
+                        <td>${formatDate(backup.created)}</td>
+                        <td>${formatSize(backup.size)}</td>
+                        <td>${status}</td>
+                        <td>
+                            <button class="btn" onclick="downloadBackup('${backup.backup_id}')">${translations[currentLang].btn_download}</button>
+                            <button class="btn btn-danger" onclick="deleteBackup('${backup.backup_id}')">${translations[currentLang].btn_delete_backup}</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Failed to load backups:', error);
+            }
+        }
+
+        function downloadBackup(backupId) {
+            window.location.href = `/api/admin/backups/${backupId}/download`;
+        }
+
+        async function deleteBackup(backupId) {
+            if (!confirm(translations[currentLang].confirm_delete_backup)) return;
+
+            try {
+                const response = await fetch(`/api/admin/backups/${backupId}`, { method: 'DELETE' });
+                if (response.ok) {
+                    alert(translations[currentLang].alert_backup_deleted);
+                    loadBackups();
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            }
+        }
+
+        function formatSize(bytes) {
+            const mb = bytes / (1024 * 1024);
+            return mb < 1 ? `${(bytes / 1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
+        }
+
+        function formatDate(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+
+        function getBackupStatus(backup) {
+            if (!backup.metadata) return translations[currentLang].backup_status_ok;
+            const meta = backup.metadata;
+            if (meta.central_success && meta.nodes_backed_up === meta.total_nodes) {
+                return `✓ ${translations[currentLang].backup_status_ok}`;
+            } else if (meta.nodes_backed_up > 0) {
+                return `⚠ ${translations[currentLang].backup_status_partial}`;
+            } else {
+                return `✗ ${translations[currentLang].backup_status_failed}`;
+            }
         }
 
         // Initial load

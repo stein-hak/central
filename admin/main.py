@@ -1274,6 +1274,271 @@ async def delete_key(request: Request, key_id: int, db: Session = Depends(get_db
     return {"message": "Key deleted successfully"}
 
 
+# ============================================================================
+# Backup & Restore API Routes
+# ============================================================================
+
+BACKUP_DIR = "/opt/central/backups"
+
+@app.post("/api/admin/backup")
+async def create_backup(request: Request, db: Session = Depends(get_db)):
+    """Create backup of entire cluster (central DB + all nodes)"""
+    check_auth(request)
+
+    import subprocess
+    from datetime import datetime
+    import tarfile
+
+    try:
+        # Create backup directory if it doesn't exist
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_id = f"backup_{timestamp}"
+        backup_path = f"{BACKUP_DIR}/{backup_id}"
+        os.makedirs(backup_path, exist_ok=True)
+
+        results = {
+            "backup_id": backup_id,
+            "timestamp": datetime.now().isoformat(),
+            "central": None,
+            "nodes": []
+        }
+
+        # 1. Backup central PostgreSQL database
+        try:
+            central_backup_file = f"{backup_path}/central_postgres.sql"
+            cmd = f"docker compose exec -T postgres pg_dump -U postgres xui_central"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd="/opt/central",
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode == 0:
+                with open(central_backup_file, 'w') as f:
+                    f.write(result.stdout)
+
+                file_size = os.path.getsize(central_backup_file)
+                results["central"] = {
+                    "success": True,
+                    "size": file_size,
+                    "file": "central_postgres.sql"
+                }
+            else:
+                results["central"] = {
+                    "success": False,
+                    "error": result.stderr
+                }
+        except Exception as e:
+            results["central"] = {
+                "success": False,
+                "error": str(e)
+            }
+
+        # 2. Backup all nodes via API
+        nodes = db.query(Node).all()
+        for node in nodes:
+            try:
+                session = requests.Session()
+                session.verify = False
+
+                # Login to node
+                login_response = session.post(
+                    f"{node.url}/login",
+                    data={"username": node.username, "password": node.password},
+                    timeout=10
+                )
+
+                if login_response.status_code != 200:
+                    results["nodes"].append({
+                        "node": node.name,
+                        "success": False,
+                        "error": "Login failed"
+                    })
+                    continue
+
+                # Get database backup via API
+                backup_response = session.get(
+                    f"{node.url}/server/getDb",
+                    timeout=30
+                )
+
+                if backup_response.status_code == 200:
+                    node_backup_file = f"{backup_path}/{node.name}.db"
+                    with open(node_backup_file, 'wb') as f:
+                        f.write(backup_response.content)
+
+                    file_size = os.path.getsize(node_backup_file)
+                    results["nodes"].append({
+                        "node": node.name,
+                        "success": True,
+                        "size": file_size,
+                        "file": f"{node.name}.db"
+                    })
+                else:
+                    results["nodes"].append({
+                        "node": node.name,
+                        "success": False,
+                        "error": f"API returned {backup_response.status_code}"
+                    })
+
+            except Exception as e:
+                results["nodes"].append({
+                    "node": node.name,
+                    "success": False,
+                    "error": str(e)
+                })
+
+        # 3. Create metadata file
+        metadata = {
+            "backup_id": backup_id,
+            "timestamp": results["timestamp"],
+            "central_success": results["central"]["success"] if results["central"] else False,
+            "nodes_backed_up": len([n for n in results["nodes"] if n["success"]]),
+            "total_nodes": len(nodes),
+            "results": results
+        }
+
+        with open(f"{backup_path}/metadata.json", 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        # 4. Create compressed archive
+        archive_path = f"{BACKUP_DIR}/{backup_id}.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(backup_path, arcname=backup_id)
+
+        # 5. Clean up uncompressed files
+        import shutil
+        shutil.rmtree(backup_path)
+
+        # 6. Get final archive size
+        archive_size = os.path.getsize(archive_path)
+
+        return {
+            "success": True,
+            "backup_id": backup_id,
+            "size": archive_size,
+            "timestamp": metadata["timestamp"],
+            "summary": {
+                "central": results["central"]["success"] if results["central"] else False,
+                "nodes": f"{metadata['nodes_backed_up']}/{metadata['total_nodes']}"
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@app.get("/api/admin/backups")
+async def list_backups(request: Request):
+    """List all available backups"""
+    check_auth(request)
+
+    from datetime import datetime
+
+    try:
+        if not os.path.exists(BACKUP_DIR):
+            return {"backups": []}
+
+        backups = []
+        for filename in os.listdir(BACKUP_DIR):
+            if filename.endswith('.tar.gz') and filename.startswith('backup_'):
+                filepath = os.path.join(BACKUP_DIR, filename)
+                backup_id = filename.replace('.tar.gz', '')
+
+                # Get file stats
+                stats = os.stat(filepath)
+                size = stats.st_size
+                created = datetime.fromtimestamp(stats.st_mtime)
+
+                # Try to extract metadata
+                metadata = None
+                try:
+                    import tarfile
+                    with tarfile.open(filepath, 'r:gz') as tar:
+                        try:
+                            metadata_file = tar.extractfile(f"{backup_id}/metadata.json")
+                            if metadata_file:
+                                metadata = json.load(metadata_file)
+                        except:
+                            pass
+                except:
+                    pass
+
+                backups.append({
+                    "backup_id": backup_id,
+                    "filename": filename,
+                    "size": size,
+                    "created": created.isoformat(),
+                    "metadata": metadata
+                })
+
+        # Sort by creation date (newest first)
+        backups.sort(key=lambda x: x['created'], reverse=True)
+
+        return {"backups": backups}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/backups/{backup_id}/download")
+async def download_backup(request: Request, backup_id: str):
+    """Download backup archive"""
+    check_auth(request)
+
+    from fastapi.responses import FileResponse
+
+    filepath = os.path.join(BACKUP_DIR, f"{backup_id}.tar.gz")
+
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    return FileResponse(
+        filepath,
+        media_type="application/gzip",
+        filename=f"{backup_id}.tar.gz"
+    )
+
+
+@app.delete("/api/admin/backups/{backup_id}")
+async def delete_backup(request: Request, backup_id: str):
+    """Delete backup archive"""
+    check_auth(request)
+
+    filepath = os.path.join(BACKUP_DIR, f"{backup_id}.tar.gz")
+
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    try:
+        os.remove(filepath)
+        return {"message": "Backup deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/backups/{backup_id}/restore")
+async def restore_backup(request: Request, backup_id: str, db: Session = Depends(get_db)):
+    """Restore from backup (DANGEROUS - requires confirmation)"""
+    check_auth(request)
+
+    # This is a placeholder - full restore is complex and dangerous
+    # Should be implemented carefully with proper safeguards
+
+    return {
+        "success": False,
+        "message": "Restore functionality not yet implemented. Please restore manually for safety."
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
