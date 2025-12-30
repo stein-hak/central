@@ -709,7 +709,7 @@ async def update_node(
     # This ensures keys are always in sync with current node name/domain
     keys = db.query(Key).filter(Key.node_id == node_id, Key.manual == False).all()
     for key in keys:
-        # Extract UUID and client email from existing key
+        # Get client email for the key
         client = db.query(Client).filter(Client.id == key.client_id).first()
         if client:
             # Regenerate VLESS URL with current node info
@@ -719,7 +719,8 @@ async def update_node(
             else:
                 transport = "grpc"
 
-            new_vless_url = create_vless_url(node, client.email, str(client.uuid), key.inbound_id, transport)
+            # UUID is stored in the key, not the client
+            new_vless_url = create_vless_url(node, client.email, str(key.uuid), key.inbound_id, transport)
             key.vless_url = new_vless_url
 
     db.commit()
