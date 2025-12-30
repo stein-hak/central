@@ -1326,8 +1326,9 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
                     continue
 
                 # Get database backup via API
+                # Note: endpoint might be /panel/api/server/getDb or /server/getDb
                 backup_response = session.get(
-                    f"{node.url}/server/getDb",
+                    f"{node.url}/panel/api/server/getDb",
                     timeout=30
                 )
 
