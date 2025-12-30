@@ -1392,6 +1392,9 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
         }
 
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Backup error: {error_detail}")
         return {
             "success": False,
             "error": str(e)
