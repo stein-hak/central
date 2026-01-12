@@ -1143,17 +1143,16 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
             settings = json.loads(inbound["settings"])
             clients_list = settings.get("clients", [])
 
-            # Extract email from VLESS URL
-            # Format: vless://uuid@domain:port?...#email
-            try:
-                email = key.vless_url.split('#')[-1]
-                # Decode URL-encoded email (e.g., %20 -> space, %F0%9F%87 -> emoji)
-                email = unquote(email)
-            except:
+            # Determine email based on inbound type
+            # gRPC uses client.email, XHTTP uses client.email-xhttp
+            inbound_remark = inbound.get("remark", "").lower()
+            if "xhttp" in inbound_remark:
+                email = f"{client.email}-xhttp"
+            else:
                 email = client.email
 
             # Find client in inbound
-            print(f"Looking for email '{email}' in inbound {key.inbound_id} on node {node.name}")
+            print(f"Looking for email '{email}' in inbound {key.inbound_id} ({inbound.get('remark')}) on node {node.name}")
             print(f"Found {len(clients_list)} clients in inbound")
 
             for client_obj in clients_list:
@@ -1298,22 +1297,18 @@ async def update_client_limit(request: Request, client_id: int, db: Session = De
             settings = json.loads(inbound["settings"])
             clients_list = settings.get("clients", [])
 
-            # Update limitIp for all client emails in this group
-            updated_count = 0
-            client_emails = set()
-            for key in keys_group:
-                # Extract email from VLESS URL
-                # Format: vless://uuid@domain:port?...#email
-                try:
-                    email = key.vless_url.split('#')[-1]
-                    # Decode URL-encoded email
-                    email = unquote(email)
-                    client_emails.add(email)
-                except:
-                    pass
+            # Determine email based on inbound type
+            # gRPC uses client.email, XHTTP uses client.email-xhttp
+            inbound_remark = inbound.get("remark", "").lower()
+            if "xhttp" in inbound_remark:
+                search_email = f"{client.email}-xhttp"
+            else:
+                search_email = client.email
 
+            # Update limitIp for matching client
+            updated_count = 0
             for client_obj in clients_list:
-                if client_obj.get("email") in client_emails:
+                if client_obj.get("email") == search_email:
                     client_obj["limitIp"] = limit_ip
                     updated_count += 1
 
