@@ -51,8 +51,8 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # 1:1 relationship with Client
-    client = relationship("Client", back_populates="user", uselist=False)
+    # 1:1 relationship with Client (cascade delete to client when user is deleted)
+    client = relationship("Client", back_populates="user", uselist=False, cascade="all, delete")
 
 
 class Client(Base):
