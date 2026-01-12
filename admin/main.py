@@ -1866,7 +1866,7 @@ async def get_users(request: Request, db: Session = Depends(get_db)):
         # Get associated client info
         if user.client:
             subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
-            user_data["subscription_url"] = f"{subscription_base}/sub/{user.client.email}"
+            user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
             user_data["client_email"] = user.client.email
             user_data["enabled"] = user.client.enabled
 
@@ -1902,7 +1902,7 @@ async def get_user(request: Request, telegram_id: int, db: Session = Depends(get
     # Get associated client info
     if user.client:
         subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
-        user_data["subscription_url"] = f"{subscription_base}/sub/{user.client.email}"
+        user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
         user_data["client_email"] = user.client.email
 
     return user_data
@@ -1976,7 +1976,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
             "name": user.name,
             "payment_status": user.payment_status,
             "limit_ip": user.limit_ip,
-            "subscription_url": f"{subscription_base}/sub/{client.email}",
+            "subscription_url": f"{subscription_base}/{client.email}",
             "client_email": client.email,
             "keys_created": [],  # Keys already exist
             "errors": None,
@@ -1987,7 +1987,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
     # Option 2: Create new client with keys on all nodes
     # Generate unique client email
     client_uuid = str(uuid.uuid4())[:8]
-    client_email = f"Client-{client_uuid}@gorillaerror.com"
+    client_email = f"Client-{client_uuid}"
 
     # Create client
     client = Client(
@@ -2155,7 +2155,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
         "name": user.name,
         "payment_status": user.payment_status,
         "limit_ip": user.limit_ip,
-        "subscription_url": f"{subscription_base}/sub/{client.email}",
+        "subscription_url": f"{subscription_base}/{client.email}",
         "client_email": client.email,
         "keys_created": keys_created,
         "errors": errors if errors else None,
