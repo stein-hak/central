@@ -392,6 +392,7 @@
                             <th style="width: 40px;"><input type="checkbox" id="selectAllClients" onchange="toggleSelectAll()"></th>
                             <th data-i18n="th_email">Email</th>
                             <th data-i18n="th_status">Status</th>
+                            <th data-i18n="th_ip_limit">IP Limit</th>
                             <th data-i18n="th_keys">Keys</th>
                             <th data-i18n="th_created">Created</th>
                             <th data-i18n="th_actions">Actions</th>
@@ -555,6 +556,42 @@
         </div>
     </div>
 
+    <!-- IP Limit Modal -->
+    <div id="ipLimitModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <span data-i18n="ip_limit_modal_title">IP Limit Settings</span>
+                <span onclick="closeIpLimitModal()" style="float: right; cursor: pointer; font-size: 24px; font-weight: bold; color: #999; line-height: 1;">&times;</span>
+            </div>
+            <p style="color: #7f8c8d; margin-bottom: 15px;"><strong data-i18n="client_label">Client:</strong> <span id="ipLimitClientEmail"></span></p>
+
+            <div id="ipLimitLoading" style="text-align: center; padding: 20px;">
+                <div style="color: #667eea;" data-i18n="loading">Loading...</div>
+            </div>
+
+            <div id="ipLimitContent" style="display: none;">
+                <div style="background: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                    <p style="margin: 0 0 10px 0;"><strong data-i18n="current_limit_label">Current IP Limit:</strong> <span id="currentIpLimit" style="font-size: 18px; color: #667eea;">-</span></p>
+                    <small style="color: #7f8c8d;" data-i18n="ip_limit_explanation">0 = unlimited, any number > 0 = max concurrent IPs allowed</small>
+                </div>
+
+                <form id="updateIpLimitForm" onsubmit="updateIpLimit(event)">
+                    <input type="hidden" id="ipLimitClientId" name="client_id">
+                    <div class="form-group">
+                        <label data-i18n="new_limit_label">New IP Limit:</label>
+                        <input type="number" name="limit_ip" min="0" required placeholder="0" style="width: 100%;">
+                        <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="ip_limit_help">Enter 0 for unlimited, or a number like 3, 6, etc.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary" data-i18n="btn_update_limit">Update Limit</button>
+                </form>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn" onclick="closeIpLimitModal()" data-i18n="btn_close">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const translations = {
@@ -593,6 +630,7 @@
                 search_clients: 'Search by email...',
                 th_email: 'Email',
                 th_keys: 'Keys',
+                th_ip_limit: 'IP Limit',
                 th_created: 'Created',
                 modal_title: 'Subscription Link',
                 scan_instruction: 'Scan QR code with VPN app or copy link below',
@@ -643,7 +681,17 @@
                 backup_status_failed: 'Failed',
                 alert_backup_created: 'Backup created successfully',
                 alert_backup_deleted: 'Backup deleted',
-                alert_backup_error: 'Backup failed'
+                alert_backup_error: 'Backup failed',
+                btn_edit_limit: 'Edit Limit',
+                ip_limit_modal_title: 'IP Limit Settings',
+                current_limit_label: 'Current IP Limit',
+                ip_limit_explanation: '0 = unlimited, any number > 0 = max concurrent IPs allowed',
+                new_limit_label: 'New IP Limit',
+                ip_limit_help: 'Enter 0 for unlimited, or a number like 3, 6, etc.',
+                btn_update_limit: 'Update Limit',
+                loading: 'Loading...',
+                ip_limit_unlimited: 'Unlimited',
+                alert_limit_updated: 'IP limit updated successfully'
             },
             ru: {
                 title: 'Менеджер подписок',
@@ -680,6 +728,7 @@
                 search_clients: 'Поиск по email...',
                 th_email: 'Email',
                 th_keys: 'Ключи',
+                th_ip_limit: 'Лимит IP',
                 th_created: 'Создан',
                 modal_title: 'Ссылка на подписку',
                 scan_instruction: 'Сканируйте QR код VPN приложением или скопируйте ссылку ниже',
@@ -730,7 +779,17 @@
                 backup_status_failed: 'Ошибка',
                 alert_backup_created: 'Резервная копия создана',
                 alert_backup_deleted: 'Резервная копия удалена',
-                alert_backup_error: 'Ошибка создания копии'
+                alert_backup_error: 'Ошибка создания копии',
+                btn_edit_limit: 'Изменить лимит',
+                ip_limit_modal_title: 'Настройки лимита IP',
+                current_limit_label: 'Текущий лимит IP',
+                ip_limit_explanation: '0 = без ограничений, число > 0 = макс. количество одновременных IP',
+                new_limit_label: 'Новый лимит IP',
+                ip_limit_help: 'Введите 0 для безлимита, или число как 3, 6 и т.д.',
+                btn_update_limit: 'Обновить лимит',
+                loading: 'Загрузка...',
+                ip_limit_unlimited: 'Без ограничений',
+                alert_limit_updated: 'Лимит IP успешно обновлен'
             }
         };
 
@@ -981,6 +1040,7 @@
                     <td><input type="checkbox" class="client-checkbox" value="${client.id}" onchange="updateBatchDeleteBtn()"></td>
                     <td>${client.email}</td>
                     <td><span class="badge badge-${client.enabled ? 'success' : 'danger'}">${statusText}</span></td>
+                    <td id="ip-limit-${client.id}"><span style="color: #999;">-</span></td>
                     <td>${client.keys_count}</td>
                     <td>${date}</td>
                     <td>
@@ -990,6 +1050,7 @@
                         }
                         <button class="btn btn-primary" onclick="showSubscription(${client.id})">${translations[currentLang].btn_sub_link}</button>
                         <button class="btn" style="background: #3498db; color: white;" onclick="showKeys(${client.id})">${translations[currentLang].btn_view_keys}</button>
+                        <button class="btn" style="background: #f39c12; color: white;" onclick="showIpLimitModal(${client.id}, '${client.email}')">${translations[currentLang].btn_edit_limit}</button>
                         <button class="btn btn-danger" onclick="deleteClient(${client.id})">${translations[currentLang].btn_delete}</button>
                     </td>
                 `;
@@ -1308,6 +1369,94 @@
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text);
             alert('Copied to clipboard!');
+        }
+
+        // IP Limit Management Functions
+        async function showIpLimitModal(clientId, clientEmail) {
+            document.getElementById('ipLimitClientId').value = clientId;
+            document.getElementById('ipLimitClientEmail').textContent = clientEmail;
+
+            // Show loading
+            document.getElementById('ipLimitLoading').style.display = 'block';
+            document.getElementById('ipLimitContent').style.display = 'none';
+
+            // Show modal
+            document.getElementById('ipLimitModal').classList.add('active');
+
+            // Fetch current IP limit
+            try {
+                const response = await fetch(`/api/clients/${clientId}/limit`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const limitText = data.limit_ip === 0 ? translations[currentLang].ip_limit_unlimited : data.limit_ip;
+                    document.getElementById('currentIpLimit').textContent = limitText;
+
+                    // Hide loading, show content
+                    document.getElementById('ipLimitLoading').style.display = 'none';
+                    document.getElementById('ipLimitContent').style.display = 'block';
+
+                    // Update table cell
+                    const cell = document.getElementById(`ip-limit-${clientId}`);
+                    if (cell) {
+                        cell.innerHTML = data.limit_ip === 0
+                            ? `<span style="color: #27ae60; font-weight: bold;">∞</span>`
+                            : `<span style="color: #667eea; font-weight: bold;">${data.limit_ip}</span>`;
+                    }
+                } else {
+                    throw new Error('Failed to fetch IP limit');
+                }
+            } catch (error) {
+                document.getElementById('ipLimitLoading').innerHTML = `<div style="color: #e74c3c;">${translations[currentLang].alert_error}: ${error.message}</div>`;
+            }
+        }
+
+        function closeIpLimitModal() {
+            document.getElementById('ipLimitModal').classList.remove('active');
+            // Reset form
+            document.getElementById('updateIpLimitForm').reset();
+        }
+
+        async function updateIpLimit(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const clientId = document.getElementById('ipLimitClientId').value;
+            const limitIp = parseInt(form.querySelector('input[name="limit_ip"]').value);
+
+            try {
+                const response = await fetch(`/api/clients/${clientId}/limit`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ limit_ip: limitIp })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(translations[currentLang].alert_limit_updated || 'IP limit updated successfully');
+
+                    // Update table cell
+                    const cell = document.getElementById(`ip-limit-${clientId}`);
+                    if (cell) {
+                        cell.innerHTML = limitIp === 0
+                            ? `<span style="color: #27ae60; font-weight: bold;">∞</span>`
+                            : `<span style="color: #667eea; font-weight: bold;">${limitIp}</span>`;
+                    }
+
+                    // Update current limit in modal
+                    const limitText = limitIp === 0 ? translations[currentLang].ip_limit_unlimited : limitIp;
+                    document.getElementById('currentIpLimit').textContent = limitText;
+
+                    // Close modal
+                    closeIpLimitModal();
+                } else {
+                    const error = await response.json();
+                    alert(`${translations[currentLang].alert_error}: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            }
         }
 
         // Backup Management Functions
