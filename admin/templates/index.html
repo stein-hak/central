@@ -558,35 +558,38 @@
 
     <!-- IP Limit Modal -->
     <div id="ipLimitModal" class="modal">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
+        <div class="modal-content" style="max-width: 600px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="flex-shrink: 0;">
                 <span data-i18n="ip_limit_modal_title">IP Limit Settings</span>
                 <span onclick="closeIpLimitModal()" style="float: right; cursor: pointer; font-size: 24px; font-weight: bold; color: #999; line-height: 1;">&times;</span>
             </div>
-            <p style="color: #7f8c8d; margin-bottom: 15px;"><strong data-i18n="client_label">Client:</strong> <span id="ipLimitClientEmail"></span></p>
 
-            <div id="ipLimitLoading" style="text-align: center; padding: 20px;">
-                <div style="color: #667eea;" data-i18n="loading">Loading...</div>
-            </div>
+            <div style="flex: 1; overflow-y: auto; margin-bottom: 20px;">
+                <p style="color: #7f8c8d; margin-bottom: 15px;"><strong data-i18n="client_label">Client:</strong> <span id="ipLimitClientEmail"></span></p>
 
-            <div id="ipLimitContent" style="display: none;">
-                <div style="background: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-                    <p style="margin: 0 0 10px 0;"><strong data-i18n="current_limit_label">Current IP Limit:</strong> <span id="currentIpLimit" style="font-size: 18px; color: #667eea;">-</span></p>
-                    <small style="color: #7f8c8d;" data-i18n="ip_limit_explanation">0 = unlimited, any number > 0 = max concurrent IPs allowed</small>
+                <div id="ipLimitLoading" style="text-align: center; padding: 20px;">
+                    <div style="color: #667eea;" data-i18n="loading">Loading...</div>
                 </div>
 
-                <form id="updateIpLimitForm" onsubmit="updateIpLimit(event)">
-                    <input type="hidden" id="ipLimitClientId" name="client_id">
-                    <div class="form-group">
-                        <label data-i18n="new_limit_label">New IP Limit:</label>
-                        <input type="number" name="limit_ip" min="0" required placeholder="0" style="width: 100%;">
-                        <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="ip_limit_help">Enter 0 for unlimited, or a number like 3, 6, etc.</small>
+                <div id="ipLimitContent" style="display: none;">
+                    <div style="background: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                        <p style="margin: 0 0 10px 0;"><strong data-i18n="current_limit_label">Current IP Limit:</strong> <span id="currentIpLimit" style="font-size: 18px; color: #667eea;">-</span></p>
+                        <small style="color: #7f8c8d;" data-i18n="ip_limit_explanation">0 = unlimited, any number > 0 = max concurrent IPs allowed</small>
                     </div>
-                    <button type="submit" class="btn btn-primary" data-i18n="btn_update_limit">Update Limit</button>
-                </form>
+
+                    <form id="updateIpLimitForm" onsubmit="updateIpLimit(event)">
+                        <input type="hidden" id="ipLimitClientId" name="client_id">
+                        <div class="form-group">
+                            <label data-i18n="new_limit_label">New IP Limit:</label>
+                            <input type="number" name="limit_ip" min="0" required placeholder="0" style="width: 100%;">
+                            <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="ip_limit_help">Enter 0 for unlimited, or a number like 3, 6, etc.</small>
+                        </div>
+                        <button type="submit" class="btn btn-primary" data-i18n="btn_update_limit">Update Limit</button>
+                    </form>
+                </div>
             </div>
 
-            <div class="modal-footer">
+            <div class="modal-footer" style="flex-shrink: 0; border-top: 1px solid #ecf0f1; padding-top: 15px; margin-top: 0;">
                 <button class="btn" onclick="closeIpLimitModal()" data-i18n="btn_close">Close</button>
             </div>
         </div>
@@ -1606,6 +1609,46 @@
 
         // Initial load
         loadNodes();
+
+        // Global ESC key handler for closing modals
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' || event.keyCode === 27) {
+                // Close IP Limit Modal
+                const ipLimitModal = document.getElementById('ipLimitModal');
+                if (ipLimitModal && ipLimitModal.classList.contains('active')) {
+                    closeIpLimitModal();
+                    return;
+                }
+
+                // Close Subscription Modal
+                const subModal = document.getElementById('subModal');
+                if (subModal && subModal.classList.contains('active')) {
+                    closeSubModal();
+                    return;
+                }
+
+                // Close Batch Subscriptions Modal
+                const batchSubsModal = document.getElementById('batchSubsModal');
+                if (batchSubsModal && batchSubsModal.classList.contains('active')) {
+                    closeBatchSubsModal();
+                    return;
+                }
+
+                // Close Keys Modal
+                const keysModal = document.getElementById('keysModal');
+                if (keysModal && keysModal.classList.contains('active')) {
+                    closeKeysModal();
+                    return;
+                }
+
+                // Close Edit Node Modal
+                const editNodeModal = document.getElementById('editNodeModal');
+                if (editNodeModal && editNodeModal.classList.contains('active')) {
+                    closeEditNodeModal();
+                    return;
+                }
+            }
+        });
     </script>
 </body>
 </html>
