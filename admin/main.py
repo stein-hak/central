@@ -1910,7 +1910,10 @@ async def get_user(request: Request, telegram_id: int, db: Session = Depends(get
 
 @app.post("/api/users")
 async def create_user(request: Request, db: Session = Depends(get_db)):
-    """Create new user with subscription and keys on all nodes"""
+    """Create new user with subscription and keys on all nodes
+
+    If client_email is provided, links to existing client instead of creating new one.
+    """
     check_auth(request)
 
     data = await request.json()
@@ -1920,6 +1923,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
     payment_status = data.get("payment_status", PaymentStatus.TEST)
     limit_ip = data.get("limit_ip", 0)
     tag = data.get("tag")
+    client_email = data.get("client_email")  # Optional: link to existing client
 
     if not telegram_id:
         raise HTTPException(status_code=400, detail="telegram_id is required")
@@ -1947,6 +1951,40 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()  # Get user.id
 
+    # Option 1: Link to existing client
+    if client_email:
+        client = db.query(Client).filter(Client.email == client_email).first()
+        if not client:
+            db.rollback()
+            raise HTTPException(status_code=404, detail=f"Client with email {client_email} not found")
+
+        if client.user_id is not None:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Client {client_email} is already linked to another user")
+
+        # Link existing client to new user
+        client.user_id = user.id
+        db.commit()
+        db.refresh(user)
+        db.refresh(client)
+
+        subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+
+        return {
+            "id": user.id,
+            "telegram_id": user.telegram_id,
+            "name": user.name,
+            "payment_status": user.payment_status,
+            "limit_ip": user.limit_ip,
+            "subscription_url": f"{subscription_base}/sub/{client.email}",
+            "client_email": client.email,
+            "keys_created": [],  # Keys already exist
+            "errors": None,
+            "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+            "linked_existing": True
+        }
+
+    # Option 2: Create new client with keys on all nodes
     # Generate unique client email
     client_uuid = str(uuid.uuid4())[:8]
     client_email = f"Client-{client_uuid}@gorillaerror.com"
@@ -2121,7 +2159,8 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
         "client_email": client.email,
         "keys_created": keys_created,
         "errors": errors if errors else None,
-        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None
+        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+        "linked_existing": False
     }
 
 
