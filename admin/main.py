@@ -1990,7 +1990,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
                 continue
 
             # Get inbounds list
-            inbounds_response = session.post(
+            inbounds_response = session.get(
                 f"{node.url}/panel/api/inbounds/list",
                 verify=False,
                 timeout=10
