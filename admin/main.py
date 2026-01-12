@@ -1081,7 +1081,7 @@ async def disable_client(request: Request, client_id: int, db: Session = Depends
 
 @app.get("/api/clients/{client_id}/limit")
 async def get_client_limit(request: Request, client_id: int, db: Session = Depends(get_db)):
-    """Get IP limit for client from nodes"""
+    """Get IP limit for client from all nodes"""
     check_auth(request)
 
     try:
@@ -1090,93 +1090,107 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
 
-        # Get first key for this client to query a node
-        key = db.query(Key).filter(Key.client_id == client_id).first()
-        if not key:
-            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "No keys found, assuming unlimited"}
+        # Get all keys for this client
+        keys = db.query(Key).filter(Key.client_id == client_id).all()
+        if not keys:
+            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "nodes": {}, "message": "No keys found"}
 
-        node = db.query(Node).filter(Node.id == key.node_id).first()
-        if not node:
-            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Node not found, assuming unlimited"}
+        # Collect limitIp from each node/inbound
+        limit_values = {}  # {node_name: limit_ip}
 
-        session = requests.Session()
+        for key in keys:
+            node = db.query(Node).filter(Node.id == key.node_id).first()
+            if not node:
+                continue
 
-        try:
-            # Login to node
-            login_response = session.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password},
-                verify=False,
-                timeout=10
-            )
+            session = requests.Session()
+            try:
+                # Login to node
+                login_response = session.post(
+                    f"{node.url}/login",
+                    data={"username": node.username, "password": node.password},
+                    verify=False,
+                    timeout=10
+                )
 
-            if login_response.status_code != 200:
-                print(f"Login failed for node {node.name}: {login_response.status_code}")
-                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Login failed, assuming unlimited"}
+                if login_response.status_code != 200:
+                    print(f"[IP Limit Check] Login failed for node {node.name}")
+                    continue
 
-            # Get all inbounds and find the one we need
-            get_response = session.get(
-                f"{node.url}/panel/api/inbounds/list",
-                verify=False,
-                timeout=30
-            )
+                # Get all inbounds
+                get_response = session.get(
+                    f"{node.url}/panel/api/inbounds/list",
+                    verify=False,
+                    timeout=30
+                )
 
-            if get_response.status_code != 200:
-                print(f"Failed to get inbounds list on node {node.name}: {get_response.status_code}")
-                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Failed to get inbounds, assuming unlimited"}
+                if get_response.status_code != 200:
+                    print(f"[IP Limit Check] Failed to get inbounds on node {node.name}")
+                    continue
 
-            inbounds_data = get_response.json()
-            if not inbounds_data.get("success"):
-                print(f"API returned success=false for inbounds list on node {node.name}")
-                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "API error, assuming unlimited"}
+                inbounds_data = get_response.json()
+                if not inbounds_data.get("success"):
+                    continue
 
-            # Find the specific inbound by ID
-            inbound = None
-            for ib in inbounds_data.get("obj", []):
-                if ib.get("id") == key.inbound_id:
-                    inbound = ib
-                    break
+                # Find the specific inbound
+                inbound = None
+                for ib in inbounds_data.get("obj", []):
+                    if ib.get("id") == key.inbound_id:
+                        inbound = ib
+                        break
 
-            if not inbound:
-                print(f"Inbound {key.inbound_id} not found on node {node.name}")
-                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Inbound not found, assuming unlimited"}
-            settings = json.loads(inbound["settings"])
-            clients_list = settings.get("clients", [])
+                if not inbound:
+                    continue
 
-            # Determine email based on inbound type
-            # gRPC uses client.email, XHTTP uses client.email-xhttp
-            inbound_remark = inbound.get("remark", "").lower()
-            if "xhttp" in inbound_remark:
-                email = f"{client.email}-xhttp"
-            else:
-                email = client.email
+                settings = json.loads(inbound["settings"])
+                clients_list = settings.get("clients", [])
 
-            # Find client in inbound
-            print(f"Looking for email '{email}' in inbound {key.inbound_id} ({inbound.get('remark')}) on node {node.name}")
-            print(f"Found {len(clients_list)} clients in inbound")
+                # Determine email based on inbound type
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    search_email = f"{client.email}-xhttp"
+                    transport = "XHTTP"
+                else:
+                    search_email = client.email
+                    transport = "gRPC"
 
-            for client_obj in clients_list:
-                client_email = client_obj.get("email")
-                if client_email == email:
-                    limit_ip = client_obj.get("limitIp", 0)
-                    print(f"Found client {email} with limitIp={limit_ip}")
-                    return {
-                        "client_id": client_id,
-                        "email": client.email,
-                        "limit_ip": limit_ip,
-                        "node": node.name,
-                        "inbound_id": key.inbound_id
-                    }
+                # Find client and get limitIp
+                for client_obj in clients_list:
+                    if client_obj.get("email") == search_email:
+                        limit_ip = client_obj.get("limitIp", 0)
+                        node_key = f"{node.name} ({transport})"
+                        limit_values[node_key] = limit_ip
+                        break
 
-            # Client not found in inbound - return 0 (unlimited)
-            print(f"Client {email} NOT FOUND in inbound {key.inbound_id}. Available emails: {[c.get('email') for c in clients_list[:5]]}")
-            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Client not found in inbound, assuming unlimited"}
+            except requests.exceptions.RequestException as e:
+                print(f"[IP Limit Check] Connection error for node {node.name}: {e}")
+            finally:
+                session.close()
 
-        except requests.exceptions.RequestException as e:
-            print(f"Request exception for client {client_id} on node {node.name}: {e}")
-            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Connection error, assuming unlimited"}
-        finally:
-            session.close()
+        # Check for mismatches
+        unique_limits = set(limit_values.values())
+        has_mismatch = len(unique_limits) > 1
+
+        if has_mismatch:
+            print(f"⚠️  WARNING: IP limit MISMATCH for client {client.email}:")
+            for node_name, limit in limit_values.items():
+                print(f"   - {node_name}: {limit}")
+
+        # Determine consensus value (most common)
+        if limit_values:
+            from collections import Counter
+            limit_counter = Counter(limit_values.values())
+            consensus_limit = limit_counter.most_common(1)[0][0]
+        else:
+            consensus_limit = 0
+
+        return {
+            "client_id": client_id,
+            "email": client.email,
+            "limit_ip": consensus_limit,
+            "nodes": limit_values,
+            "mismatch": has_mismatch
+        }
 
     except HTTPException:
         raise

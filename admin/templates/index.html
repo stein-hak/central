@@ -1383,13 +1383,28 @@
             // Show modal
             document.getElementById('ipLimitModal').classList.add('active');
 
-            // Fetch current IP limit
+            // Fetch current IP limit (with cache busting timestamp)
             try {
-                const response = await fetch(`/api/clients/${clientId}/limit`);
+                const response = await fetch(`/api/clients/${clientId}/limit?t=${Date.now()}`);
                 if (response.ok) {
                     const data = await response.json();
                     const limitText = data.limit_ip === 0 ? translations[currentLang].ip_limit_unlimited : data.limit_ip;
-                    document.getElementById('currentIpLimit').textContent = limitText;
+
+                    // Show node details if available
+                    let nodeDetails = '';
+                    if (data.nodes && Object.keys(data.nodes).length > 0) {
+                        nodeDetails = '<div style="margin-top: 10px; font-size: 12px; color: #7f8c8d;">';
+                        if (data.mismatch) {
+                            nodeDetails += '<strong style="color: #e74c3c;">⚠️ Mismatch detected:</strong><br>';
+                        }
+                        for (const [nodeName, limit] of Object.entries(data.nodes)) {
+                            const limitDisplay = limit === 0 ? '∞' : limit;
+                            const color = data.mismatch && limit !== data.limit_ip ? '#e74c3c' : '#7f8c8d';
+                            nodeDetails += `<span style="color: ${color};">${nodeName}: ${limitDisplay}</span><br>`;
+                        }
+                        nodeDetails += '</div>';
+                    }
+                    document.getElementById('currentIpLimit').innerHTML = limitText + nodeDetails;
 
                     // Hide loading, show content
                     document.getElementById('ipLimitLoading').style.display = 'none';
@@ -1398,9 +1413,10 @@
                     // Update table cell
                     const cell = document.getElementById(`ip-limit-${clientId}`);
                     if (cell) {
-                        cell.innerHTML = data.limit_ip === 0
+                        const displayHtml = data.limit_ip === 0
                             ? `<span style="color: #27ae60; font-weight: bold;">∞</span>`
                             : `<span style="color: #667eea; font-weight: bold;">${data.limit_ip}</span>`;
+                        cell.innerHTML = data.mismatch ? displayHtml + ' ⚠️' : displayHtml;
                     }
                 } else {
                     throw new Error('Failed to fetch IP limit');
@@ -1436,20 +1452,27 @@
                     const data = await response.json();
                     alert(translations[currentLang].alert_limit_updated || 'IP limit updated successfully');
 
-                    // Update table cell
-                    const cell = document.getElementById(`ip-limit-${clientId}`);
-                    if (cell) {
-                        cell.innerHTML = limitIp === 0
-                            ? `<span style="color: #27ae60; font-weight: bold;">∞</span>`
-                            : `<span style="color: #667eea; font-weight: bold;">${limitIp}</span>`;
-                    }
-
-                    // Update current limit in modal
-                    const limitText = limitIp === 0 ? translations[currentLang].ip_limit_unlimited : limitIp;
-                    document.getElementById('currentIpLimit').textContent = limitText;
-
-                    // Close modal
+                    // Close modal first
                     closeIpLimitModal();
+
+                    // Fetch fresh data from server (with cache busting)
+                    try {
+                        const freshResponse = await fetch(`/api/clients/${clientId}/limit?t=${Date.now()}`);
+                        if (freshResponse.ok) {
+                            const freshData = await freshResponse.json();
+
+                            // Update table cell with fresh data
+                            const cell = document.getElementById(`ip-limit-${clientId}`);
+                            if (cell) {
+                                const displayHtml = freshData.limit_ip === 0
+                                    ? `<span style="color: #27ae60; font-weight: bold;">∞</span>`
+                                    : `<span style="color: #667eea; font-weight: bold;">${freshData.limit_ip}</span>`;
+                                cell.innerHTML = freshData.mismatch ? displayHtml + ' ⚠️' : displayHtml;
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Failed to refresh IP limit:', error);
+                    }
                 } else {
                     const error = await response.json();
                     alert(`${translations[currentLang].alert_error}: ${error.detail}`);
