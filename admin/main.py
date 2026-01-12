@@ -1859,7 +1859,8 @@ async def get_users(request: Request, db: Session = Depends(get_db)):
             "created_at": user.created_at.isoformat() if user.created_at else None,
             "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             "subscription_url": None,
-            "client_email": None
+            "client_email": None,
+            "enabled": False
         }
 
         # Get associated client info
@@ -1867,6 +1868,7 @@ async def get_users(request: Request, db: Session = Depends(get_db)):
             subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
             user_data["subscription_url"] = f"{subscription_base}/sub/{user.client.email}"
             user_data["client_email"] = user.client.email
+            user_data["enabled"] = user.client.enabled
 
         result.append(user_data)
 
@@ -2156,8 +2158,100 @@ async def update_user(request: Request, telegram_id: int, db: Session = Depends(
 
     user.updated_at = datetime.utcnow()
 
+    # Auto-enable if renewal date extended beyond today
+    should_enable = False
+    if user.renewal_date and user.renewal_date >= date.today():
+        if user.client and not user.client.enabled:
+            user.client.enabled = True
+            should_enable = True
+
     db.commit()
     db.refresh(user)
+
+    # If we re-enabled, sync to nodes
+    if should_enable:
+        client = user.client
+        keys = db.query(Key).filter(Key.client_id == client.id).all()
+
+        for key in keys:
+            node = db.query(Node).filter(Node.id == key.node_id).first()
+            if not node:
+                continue
+
+            try:
+                # Login to node
+                session = requests.Session()
+                login_data = {"username": node.username, "password": node.password}
+                login_response = session.post(
+                    f"{node.url}/login",
+                    data=login_data,
+                    verify=False,
+                    timeout=10
+                )
+
+                if login_response.status_code != 200:
+                    continue
+
+                # Get inbound
+                inbounds_response = session.get(
+                    f"{node.url}/panel/api/inbounds/list",
+                    verify=False,
+                    timeout=10
+                )
+
+                if inbounds_response.status_code != 200:
+                    continue
+
+                inbounds = inbounds_response.json().get("obj", [])
+                inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
+
+                if not inbound:
+                    continue
+
+                # Update client enable status
+                settings = json.loads(inbound["settings"])
+                clients = settings.get("clients", [])
+
+                # Determine email to search
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    search_email = f"{client.email}-xhttp"
+                else:
+                    search_email = client.email
+
+                # Find and enable the client
+                for c in clients:
+                    if c.get("email") == search_email:
+                        c["enable"] = True
+                        break
+
+                settings["clients"] = clients
+
+                # Update inbound
+                update_data = {
+                    "up": inbound["up"],
+                    "down": inbound["down"],
+                    "total": inbound["total"],
+                    "remark": inbound["remark"],
+                    "enable": inbound["enable"],
+                    "expiryTime": inbound["expiryTime"],
+                    "listen": inbound.get("listen", ""),
+                    "port": inbound["port"],
+                    "protocol": inbound["protocol"],
+                    "settings": json.dumps(settings),
+                    "streamSettings": inbound["streamSettings"],
+                    "sniffing": inbound["sniffing"]
+                }
+
+                session.post(
+                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                    json=update_data,
+                    verify=False,
+                    timeout=10
+                )
+
+            except Exception as e:
+                print(f"Failed to re-enable user on {node.name}: {str(e)}")
 
     return {
         "id": user.id,
@@ -2279,6 +2373,135 @@ async def delete_user(request: Request, telegram_id: int, db: Session = Depends(
     return {
         "message": "User deleted successfully",
         "telegram_id": telegram_id,
+        "errors": errors if errors else None
+    }
+
+
+@app.post("/api/admin/check-renewals")
+async def check_renewals(request: Request, db: Session = Depends(get_db)):
+    """Check all users and disable those past renewal_date"""
+    check_auth(request)
+
+    today = date.today()
+
+    # Find users past renewal date with enabled clients
+    expired_users = db.query(User).join(Client).filter(
+        User.renewal_date != None,
+        User.renewal_date < today,
+        Client.enabled == True
+    ).all()
+
+    disabled_count = 0
+    errors = []
+
+    for user in expired_users:
+        try:
+            client = user.client
+
+            # Disable client in database
+            client.enabled = False
+
+            # Get all keys for this client
+            keys = db.query(Key).filter(Key.client_id == client.id).all()
+
+            # Disable keys on all nodes
+            for key in keys:
+                node = db.query(Node).filter(Node.id == key.node_id).first()
+                if not node:
+                    continue
+
+                try:
+                    # Login to node
+                    session = requests.Session()
+                    login_data = {"username": node.username, "password": node.password}
+                    login_response = session.post(
+                        f"{node.url}/login",
+                        data=login_data,
+                        verify=False,
+                        timeout=10
+                    )
+
+                    if login_response.status_code != 200:
+                        errors.append(f"{user.telegram_id} - {node.name}: Login failed")
+                        continue
+
+                    # Get inbound
+                    inbounds_response = session.get(
+                        f"{node.url}/panel/api/inbounds/list",
+                        verify=False,
+                        timeout=10
+                    )
+
+                    if inbounds_response.status_code != 200:
+                        errors.append(f"{user.telegram_id} - {node.name}: Failed to get inbounds")
+                        continue
+
+                    inbounds = inbounds_response.json().get("obj", [])
+                    inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
+
+                    if not inbound:
+                        errors.append(f"{user.telegram_id} - {node.name}: Inbound not found")
+                        continue
+
+                    # Update client enable status
+                    settings = json.loads(inbound["settings"])
+                    clients = settings.get("clients", [])
+
+                    # Determine email to search
+                    inbound_remark = inbound.get("remark", "").lower()
+                    if "xhttp" in inbound_remark:
+                        search_email = f"{client.email}-xhttp"
+                    else:
+                        search_email = client.email
+
+                    # Find and disable the client
+                    for c in clients:
+                        if c.get("email") == search_email:
+                            c["enable"] = False
+                            break
+
+                    settings["clients"] = clients
+
+                    # Update inbound
+                    update_data = {
+                        "up": inbound["up"],
+                        "down": inbound["down"],
+                        "total": inbound["total"],
+                        "remark": inbound["remark"],
+                        "enable": inbound["enable"],
+                        "expiryTime": inbound["expiryTime"],
+                        "listen": inbound.get("listen", ""),
+                        "port": inbound["port"],
+                        "protocol": inbound["protocol"],
+                        "settings": json.dumps(settings),
+                        "streamSettings": inbound["streamSettings"],
+                        "sniffing": inbound["sniffing"]
+                    }
+
+                    update_response = session.post(
+                        f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                        json=update_data,
+                        verify=False,
+                        timeout=10
+                    )
+
+                    if update_response.status_code != 200:
+                        errors.append(f"{user.telegram_id} - {node.name}: Update failed")
+
+                except Exception as e:
+                    errors.append(f"{user.telegram_id} - {node.name}: {str(e)}")
+
+            disabled_count += 1
+            print(f"Disabled user {user.telegram_id} ({user.name}) - renewal_date: {user.renewal_date}")
+
+        except Exception as e:
+            errors.append(f"User {user.telegram_id}: {str(e)}")
+
+    db.commit()
+
+    return {
+        "checked": len(expired_users),
+        "disabled": disabled_count,
         "errors": errors if errors else None
     }
 

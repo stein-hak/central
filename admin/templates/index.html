@@ -425,7 +425,12 @@
             </div>
 
             <div class="card">
-                <h2 data-i18n="users_list">Users</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2 data-i18n="users_list">Users</h2>
+                    <button class="btn" style="background: #f39c12; color: white;" onclick="checkRenewals()" data-i18n="btn_check_renewals">
+                        Check Renewals
+                    </button>
+                </div>
                 <table id="usersTable">
                     <thead>
                         <tr>
@@ -433,7 +438,7 @@
                             <th data-i18n="th_name">Name</th>
                             <th data-i18n="th_email">Email</th>
                             <th data-i18n="th_payment_status">Payment</th>
-                            <th data-i18n="th_limit_ip">IP Limit</th>
+                            <th data-i18n="th_status">Status</th>
                             <th data-i18n="th_renewal_date">Renewal Date</th>
                             <th data-i18n="th_actions">Actions</th>
                         </tr>
@@ -750,7 +755,11 @@
                 payment_status_test: 'Test',
                 payment_status_paid: 'Paid',
                 payment_status_not_paid: 'Not Paid',
-                payment_status_promo: 'Promo'
+                payment_status_promo: 'Promo',
+                btn_check_renewals: 'Check Renewals',
+                confirm_check_renewals: 'Check all users and disable those past renewal date?',
+                alert_renewals_checked: 'Renewal check complete',
+                disabled_count: 'Disabled'
             },
             ru: {
                 title: 'Менеджер подписок',
@@ -864,7 +873,11 @@
                 payment_status_test: 'Тест',
                 payment_status_paid: 'Оплатил',
                 payment_status_not_paid: 'Не оплатил',
-                payment_status_promo: 'Промокод'
+                payment_status_promo: 'Промокод',
+                btn_check_renewals: 'Проверить продления',
+                confirm_check_renewals: 'Проверить всех пользователей и отключить тех, у кого истёк срок продления?',
+                alert_renewals_checked: 'Проверка продлений завершена',
+                disabled_count: 'Отключено'
             }
         };
 
@@ -1612,13 +1625,15 @@
                 const paymentStatus = paymentStatusMap[user.payment_status] || user.payment_status;
                 const ipLimit = user.limit_ip === 0 ? translations[currentLang].ip_limit_unlimited : user.limit_ip;
                 const renewalDate = user.renewal_date || '-';
+                const statusText = user.enabled ? translations[currentLang].status_enabled : translations[currentLang].status_disabled;
+                const statusColor = user.enabled ? '#27ae60' : '#95a5a6';
 
                 row.innerHTML = `
                     <td>${user.telegram_id}</td>
                     <td>${user.name || '-'}</td>
                     <td style="font-family: monospace; font-size: 12px;">${user.client_email || '-'}</td>
                     <td>${paymentStatus}</td>
-                    <td>${ipLimit}</td>
+                    <td style="color: ${statusColor}; font-weight: bold;">${statusText}</td>
                     <td>${renewalDate}</td>
                     <td>
                         ${user.subscription_url ? `
@@ -1690,6 +1705,34 @@
                 if (response.ok) {
                     alert(translations[currentLang].alert_user_deleted);
                     loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert(`${translations[currentLang].alert_error}: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            }
+        }
+
+        async function checkRenewals() {
+            if (!confirm(translations[currentLang].confirm_check_renewals)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/check-renewals', {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    const msg = `${translations[currentLang].alert_renewals_checked}\n${translations[currentLang].disabled_count}: ${result.disabled}`;
+                    alert(msg);
+                    loadUsers();
+
+                    if (result.errors && result.errors.length > 0) {
+                        console.warn('Renewal check errors:', result.errors);
+                    }
                 } else {
                     const error = await response.json();
                     alert(`${translations[currentLang].alert_error}: ${error.detail}`);
