@@ -1113,23 +1113,32 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
                 print(f"Login failed for node {node.name}: {login_response.status_code}")
                 return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Login failed, assuming unlimited"}
 
-            # Get inbound configuration
-            get_response = session.post(
-                f"{node.url}/panel/api/inbounds/get/{key.inbound_id}",
+            # Get all inbounds and find the one we need
+            get_response = session.get(
+                f"{node.url}/panel/api/inbounds/list",
                 verify=False,
                 timeout=30
             )
 
             if get_response.status_code != 200:
-                print(f"Failed to get inbound {key.inbound_id} on node {node.name}: {get_response.status_code}")
-                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Failed to get inbound, assuming unlimited"}
+                print(f"Failed to get inbounds list on node {node.name}: {get_response.status_code}")
+                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Failed to get inbounds, assuming unlimited"}
 
-            inbound_data = get_response.json()
-            if not inbound_data.get("success"):
-                print(f"API returned success=false for inbound {key.inbound_id} on node {node.name}")
+            inbounds_data = get_response.json()
+            if not inbounds_data.get("success"):
+                print(f"API returned success=false for inbounds list on node {node.name}")
                 return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "API error, assuming unlimited"}
 
-            inbound = inbound_data["obj"]
+            # Find the specific inbound by ID
+            inbound = None
+            for ib in inbounds_data.get("obj", []):
+                if ib.get("id") == key.inbound_id:
+                    inbound = ib
+                    break
+
+            if not inbound:
+                print(f"Inbound {key.inbound_id} not found on node {node.name}")
+                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Inbound not found, assuming unlimited"}
             settings = json.loads(inbound["settings"])
             clients_list = settings.get("clients", [])
 
@@ -1235,9 +1244,9 @@ async def update_client_limit(request: Request, client_id: int, db: Session = De
                 })
                 continue
 
-            # Get inbound configuration
-            get_response = session.post(
-                f"{node.url}/panel/api/inbounds/get/{inbound_id}",
+            # Get all inbounds and find the one we need
+            get_response = session.get(
+                f"{node.url}/panel/api/inbounds/list",
                 verify=False,
                 timeout=30
             )
@@ -1247,21 +1256,35 @@ async def update_client_limit(request: Request, client_id: int, db: Session = De
                     "node": node.name,
                     "inbound_id": inbound_id,
                     "success": False,
-                    "message": f"Failed to get inbound: {get_response.status_code}"
+                    "message": f"Failed to get inbounds list: {get_response.status_code}"
                 })
                 continue
 
-            inbound_data = get_response.json()
-            if not inbound_data.get("success"):
+            inbounds_data = get_response.json()
+            if not inbounds_data.get("success"):
                 results.append({
                     "node": node.name,
                     "inbound_id": inbound_id,
                     "success": False,
-                    "message": "API returned success=false"
+                    "message": "API returned success=false for inbounds list"
                 })
                 continue
 
-            inbound = inbound_data["obj"]
+            # Find the specific inbound by ID
+            inbound = None
+            for ib in inbounds_data.get("obj", []):
+                if ib.get("id") == inbound_id:
+                    inbound = ib
+                    break
+
+            if not inbound:
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": f"Inbound {inbound_id} not found in list"
+                })
+                continue
             settings = json.loads(inbound["settings"])
             clients_list = settings.get("clients", [])
 
