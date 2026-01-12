@@ -1083,79 +1083,88 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
     """Get IP limit for client from nodes"""
     check_auth(request)
 
-    # Get client
-    client = db.query(Client).filter(Client.id == client_id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-
-    # Get first key for this client to query a node
-    key = db.query(Key).filter(Key.client_id == client_id).first()
-    if not key:
-        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "No keys found"}
-
-    node = db.query(Node).filter(Node.id == key.node_id).first()
-    if not node:
-        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "Node not found"}
-
-    session = requests.Session()
-    requests.packages.urllib3.disable_warnings()
-
     try:
-        # Login to node
-        login_response = session.post(
-            f"{node.url}/login",
-            data={"username": node.username, "password": node.password},
-            verify=False,
-            timeout=10
-        )
+        # Get client
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
 
-        if login_response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Login failed: {login_response.status_code}")
+        # Get first key for this client to query a node
+        key = db.query(Key).filter(Key.client_id == client_id).first()
+        if not key:
+            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "No keys found, assuming unlimited"}
 
-        # Get inbound configuration
-        get_response = session.post(
-            f"{node.url}/panel/api/inbounds/get/{key.inbound_id}",
-            verify=False,
-            timeout=30
-        )
+        node = db.query(Node).filter(Node.id == key.node_id).first()
+        if not node:
+            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Node not found, assuming unlimited"}
 
-        if get_response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Failed to get inbound: {get_response.status_code}")
+        session = requests.Session()
 
-        inbound_data = get_response.json()
-        if not inbound_data.get("success"):
-            raise HTTPException(status_code=500, detail="API returned success=false")
-
-        inbound = inbound_data["obj"]
-        settings = json.loads(inbound["settings"])
-        clients_list = settings.get("clients", [])
-
-        # Extract email from VLESS URL
-        # Format: vless://uuid@domain:port?...#email
         try:
-            email = key.vless_url.split('#')[-1]
-        except:
-            email = client.email
+            # Login to node
+            login_response = session.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password},
+                verify=False,
+                timeout=10
+            )
 
-        # Find client in inbound
-        for client_obj in clients_list:
-            if client_obj.get("email") == email:
-                return {
-                    "client_id": client_id,
-                    "email": client.email,
-                    "limit_ip": client_obj.get("limitIp", 0),
-                    "node": node.name,
-                    "inbound_id": key.inbound_id
-                }
+            if login_response.status_code != 200:
+                print(f"Login failed for node {node.name}: {login_response.status_code}")
+                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Login failed, assuming unlimited"}
 
-        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "Client not found in inbound"}
+            # Get inbound configuration
+            get_response = session.post(
+                f"{node.url}/panel/api/inbounds/get/{key.inbound_id}",
+                verify=False,
+                timeout=30
+            )
+
+            if get_response.status_code != 200:
+                print(f"Failed to get inbound {key.inbound_id} on node {node.name}: {get_response.status_code}")
+                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Failed to get inbound, assuming unlimited"}
+
+            inbound_data = get_response.json()
+            if not inbound_data.get("success"):
+                print(f"API returned success=false for inbound {key.inbound_id} on node {node.name}")
+                return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "API error, assuming unlimited"}
+
+            inbound = inbound_data["obj"]
+            settings = json.loads(inbound["settings"])
+            clients_list = settings.get("clients", [])
+
+            # Extract email from VLESS URL
+            # Format: vless://uuid@domain:port?...#email
+            try:
+                email = key.vless_url.split('#')[-1]
+            except:
+                email = client.email
+
+            # Find client in inbound
+            for client_obj in clients_list:
+                if client_obj.get("email") == email:
+                    return {
+                        "client_id": client_id,
+                        "email": client.email,
+                        "limit_ip": client_obj.get("limitIp", 0),
+                        "node": node.name,
+                        "inbound_id": key.inbound_id
+                    }
+
+            # Client not found in inbound - return 0 (unlimited)
+            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Client not found in inbound, assuming unlimited"}
+
+        except requests.exceptions.RequestException as e:
+            print(f"Request exception for client {client_id} on node {node.name}: {e}")
+            return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": f"Connection error, assuming unlimited"}
+        finally:
+            session.close()
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
+        print(f"Error getting IP limit for client {client_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
 @app.put("/api/clients/{client_id}/limit")
