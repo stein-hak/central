@@ -1150,17 +1150,24 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
                 email = client.email
 
             # Find client in inbound
+            print(f"Looking for email '{email}' in inbound {key.inbound_id} on node {node.name}")
+            print(f"Found {len(clients_list)} clients in inbound")
+
             for client_obj in clients_list:
-                if client_obj.get("email") == email:
+                client_email = client_obj.get("email")
+                if client_email == email:
+                    limit_ip = client_obj.get("limitIp", 0)
+                    print(f"Found client {email} with limitIp={limit_ip}")
                     return {
                         "client_id": client_id,
                         "email": client.email,
-                        "limit_ip": client_obj.get("limitIp", 0),
+                        "limit_ip": limit_ip,
                         "node": node.name,
                         "inbound_id": key.inbound_id
                     }
 
             # Client not found in inbound - return 0 (unlimited)
+            print(f"Client {email} NOT FOUND in inbound {key.inbound_id}. Available emails: {[c.get('email') for c in clients_list[:5]]}")
             return {"client_id": client_id, "email": client.email, "limit_ip": 0, "message": "Client not found in inbound, assuming unlimited"}
 
         except requests.exceptions.RequestException as e:
