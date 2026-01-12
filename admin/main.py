@@ -172,7 +172,7 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                         "id": str(client_uuid),
                         "flow": "",
                         "email": client.email,
-                        "limitIp": 3,  # Limit to 3 concurrent devices
+                        "limitIp": 0,  # 0 = unlimited
                         "totalGB": 0,
                         "expiryTime": 0,
                         "enable": client.enabled,
@@ -265,7 +265,7 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                                 "id": str(client_uuid),
                                 "flow": "",
                                 "email": xhttp_email,
-                                "limitIp": 3,  # Limit to 3 concurrent devices
+                                "limitIp": 0,  # 0 = unlimited
                                 "totalGB": 0,
                                 "expiryTime": 0,
                                 "enable": client.enabled,
@@ -1076,6 +1076,259 @@ async def disable_client(request: Request, client_id: int, db: Session = Depends
         results.append({"node": node.name, "success": success, "message": message})
 
     return {"message": "Client disabled", "sync_results": results}
+
+
+@app.get("/api/clients/{client_id}/limit")
+async def get_client_limit(request: Request, client_id: int, db: Session = Depends(get_db)):
+    """Get IP limit for client from nodes"""
+    check_auth(request)
+
+    # Get client
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Get first key for this client to query a node
+    key = db.query(Key).filter(Key.client_id == client_id).first()
+    if not key:
+        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "No keys found"}
+
+    node = db.query(Node).filter(Node.id == key.node_id).first()
+    if not node:
+        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "Node not found"}
+
+    session = requests.Session()
+    requests.packages.urllib3.disable_warnings()
+
+    try:
+        # Login to node
+        login_response = session.post(
+            f"{node.url}/login",
+            data={"username": node.username, "password": node.password},
+            verify=False,
+            timeout=10
+        )
+
+        if login_response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Login failed: {login_response.status_code}")
+
+        # Get inbound configuration
+        get_response = session.post(
+            f"{node.url}/panel/api/inbounds/get/{key.inbound_id}",
+            verify=False,
+            timeout=30
+        )
+
+        if get_response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Failed to get inbound: {get_response.status_code}")
+
+        inbound_data = get_response.json()
+        if not inbound_data.get("success"):
+            raise HTTPException(status_code=500, detail="API returned success=false")
+
+        inbound = inbound_data["obj"]
+        settings = json.loads(inbound["settings"])
+        clients_list = settings.get("clients", [])
+
+        # Extract email from VLESS URL
+        # Format: vless://uuid@domain:port?...#email
+        try:
+            email = key.vless_url.split('#')[-1]
+        except:
+            email = client.email
+
+        # Find client in inbound
+        for client_obj in clients_list:
+            if client_obj.get("email") == email:
+                return {
+                    "client_id": client_id,
+                    "email": client.email,
+                    "limit_ip": client_obj.get("limitIp", 0),
+                    "node": node.name,
+                    "inbound_id": key.inbound_id
+                }
+
+        return {"client_id": client_id, "email": client.email, "limit_ip": None, "message": "Client not found in inbound"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.put("/api/clients/{client_id}/limit")
+async def update_client_limit(request: Request, client_id: int, db: Session = Depends(get_db)):
+    """Update IP limit for client on all nodes"""
+    check_auth(request)
+
+    # Get request body
+    body = await request.json()
+    limit_ip = body.get("limit_ip")
+
+    if limit_ip is None:
+        raise HTTPException(status_code=400, detail="limit_ip is required")
+
+    if not isinstance(limit_ip, int) or limit_ip < 0:
+        raise HTTPException(status_code=400, detail="limit_ip must be a non-negative integer")
+
+    # Get client
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Get all keys for this client
+    keys = db.query(Key).filter(Key.client_id == client_id).all()
+    if not keys:
+        return {"message": "No keys found for client", "updated_nodes": []}
+
+    # Group keys by (node_id, inbound_id)
+    node_inbound_map = {}
+    for key in keys:
+        key_tuple = (key.node_id, key.inbound_id)
+        if key_tuple not in node_inbound_map:
+            node_inbound_map[key_tuple] = []
+        node_inbound_map[key_tuple].append(key)
+
+    # Update limitIp on each node/inbound
+    results = []
+    requests.packages.urllib3.disable_warnings()
+
+    for (node_id, inbound_id), keys_group in node_inbound_map.items():
+        node = db.query(Node).filter(Node.id == node_id).first()
+        if not node:
+            results.append({
+                "node_id": node_id,
+                "inbound_id": inbound_id,
+                "success": False,
+                "message": "Node not found"
+            })
+            continue
+
+        session = requests.Session()
+
+        try:
+            # Login to node
+            login_response = session.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password},
+                verify=False,
+                timeout=10
+            )
+
+            if login_response.status_code != 200:
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": f"Login failed: {login_response.status_code}"
+                })
+                continue
+
+            # Get inbound configuration
+            get_response = session.post(
+                f"{node.url}/panel/api/inbounds/get/{inbound_id}",
+                verify=False,
+                timeout=30
+            )
+
+            if get_response.status_code != 200:
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": f"Failed to get inbound: {get_response.status_code}"
+                })
+                continue
+
+            inbound_data = get_response.json()
+            if not inbound_data.get("success"):
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": "API returned success=false"
+                })
+                continue
+
+            inbound = inbound_data["obj"]
+            settings = json.loads(inbound["settings"])
+            clients_list = settings.get("clients", [])
+
+            # Update limitIp for all client emails in this group
+            updated_count = 0
+            client_emails = set()
+            for key in keys_group:
+                # Extract email from VLESS URL
+                # Format: vless://uuid@domain:port?...#email
+                try:
+                    email = key.vless_url.split('#')[-1]
+                    client_emails.add(email)
+                except:
+                    pass
+
+            for client_obj in clients_list:
+                if client_obj.get("email") in client_emails:
+                    client_obj["limitIp"] = limit_ip
+                    updated_count += 1
+
+            # Update settings
+            settings["clients"] = clients_list
+            inbound["settings"] = json.dumps(settings)
+
+            # Send update back to node
+            update_response = session.post(
+                f"{node.url}/panel/api/inbounds/update/{inbound_id}",
+                json=inbound,
+                verify=False,
+                timeout=30
+            )
+
+            if update_response.status_code != 200:
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": f"Failed to update inbound: {update_response.status_code}"
+                })
+                continue
+
+            update_data = update_response.json()
+            if not update_data.get("success"):
+                results.append({
+                    "node": node.name,
+                    "inbound_id": inbound_id,
+                    "success": False,
+                    "message": "Update API returned success=false"
+                })
+                continue
+
+            results.append({
+                "node": node.name,
+                "inbound_id": inbound_id,
+                "success": True,
+                "message": f"Updated {updated_count} clients"
+            })
+
+        except Exception as e:
+            results.append({
+                "node": node.name if node else str(node_id),
+                "inbound_id": inbound_id,
+                "success": False,
+                "message": str(e)
+            })
+        finally:
+            session.close()
+
+    success_count = sum(1 for r in results if r.get("success"))
+    total_count = len(results)
+
+    return {
+        "message": f"Updated IP limit to {limit_ip} on {success_count}/{total_count} node/inbound combinations",
+        "limit_ip": limit_ip,
+        "results": results
+    }
 
 
 @app.delete("/api/clients/{client_id}")
