@@ -759,7 +759,8 @@
                 btn_check_renewals: 'Check Renewals',
                 confirm_check_renewals: 'Check all users and disable those past renewal date?',
                 alert_renewals_checked: 'Renewal check complete',
-                disabled_count: 'Disabled'
+                disabled_count: 'Disabled',
+                alert_user_toggled: 'User status updated successfully'
             },
             ru: {
                 title: 'Менеджер подписок',
@@ -877,7 +878,8 @@
                 btn_check_renewals: 'Проверить продления',
                 confirm_check_renewals: 'Проверить всех пользователей и отключить тех, у кого истёк срок продления?',
                 alert_renewals_checked: 'Проверка продлений завершена',
-                disabled_count: 'Отключено'
+                disabled_count: 'Отключено',
+                alert_user_toggled: 'Статус пользователя успешно обновлён'
             }
         };
 
@@ -1637,12 +1639,23 @@
                     <td>${renewalDate}</td>
                     <td>
                         ${user.subscription_url ? `
-                            <button class="btn" style="background: #3498db; color: white;"
+                            <button class="btn" style="background: #3498db; color: white; margin: 2px;"
                                 onclick="showSubModal('${user.subscription_url}')">
                                 ${translations[currentLang].btn_sub_link}
                             </button>
                         ` : ''}
-                        <button class="btn" style="background: #e74c3c; color: white;"
+                        ${user.enabled ? `
+                            <button class="btn" style="background: #95a5a6; color: white; margin: 2px;"
+                                onclick="toggleUserEnabled(${user.telegram_id}, false)">
+                                ${translations[currentLang].btn_disable}
+                            </button>
+                        ` : `
+                            <button class="btn" style="background: #27ae60; color: white; margin: 2px;"
+                                onclick="toggleUserEnabled(${user.telegram_id}, true)">
+                                ${translations[currentLang].btn_enable}
+                            </button>
+                        `}
+                        <button class="btn" style="background: #e74c3c; color: white; margin: 2px;"
                             onclick="deleteUser(${user.telegram_id})">
                             ${translations[currentLang].btn_delete}
                         </button>
@@ -1762,6 +1775,32 @@
 
             // Show modal
             document.getElementById('subModal').classList.add('active');
+        }
+
+        async function toggleUserEnabled(telegram_id, enable) {
+            const action = enable ? translations[currentLang].btn_enable : translations[currentLang].btn_disable;
+            if (!confirm(`${action} user ${telegram_id}?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/users/${telegram_id}/toggle`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: enable})
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(translations[currentLang].alert_user_toggled);
+                    loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert(`${translations[currentLang].alert_error}: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            }
         }
 
         async function loadBackups() {

@@ -2377,6 +2377,127 @@ async def delete_user(request: Request, telegram_id: int, db: Session = Depends(
     }
 
 
+@app.post("/api/users/{telegram_id}/toggle")
+async def toggle_user_enabled(request: Request, telegram_id: int, db: Session = Depends(get_db)):
+    """Enable or disable user (syncs to all nodes)"""
+    check_auth(request)
+
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not user.client:
+        raise HTTPException(status_code=400, detail="User has no client")
+
+    data = await request.json()
+    enable = data.get("enabled", True)
+
+    client = user.client
+    client.enabled = enable
+
+    # Get all keys for this client
+    keys = db.query(Key).filter(Key.client_id == client.id).all()
+
+    errors = []
+    for key in keys:
+        node = db.query(Node).filter(Node.id == key.node_id).first()
+        if not node:
+            continue
+
+        try:
+            # Login to node
+            session = requests.Session()
+            login_data = {"username": node.username, "password": node.password}
+            login_response = session.post(
+                f"{node.url}/login",
+                data=login_data,
+                verify=False,
+                timeout=10
+            )
+
+            if login_response.status_code != 200:
+                errors.append(f"{node.name}: Login failed")
+                continue
+
+            # Get inbound
+            inbounds_response = session.get(
+                f"{node.url}/panel/api/inbounds/list",
+                verify=False,
+                timeout=10
+            )
+
+            if inbounds_response.status_code != 200:
+                errors.append(f"{node.name}: Failed to get inbounds")
+                continue
+
+            inbounds = inbounds_response.json().get("obj", [])
+            inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
+
+            if not inbound:
+                errors.append(f"{node.name}: Inbound not found")
+                continue
+
+            # Update client enable status
+            settings = json.loads(inbound["settings"])
+            clients = settings.get("clients", [])
+
+            # Determine email to search
+            inbound_remark = inbound.get("remark", "").lower()
+            if "xhttp" in inbound_remark:
+                search_email = f"{client.email}-xhttp"
+            else:
+                search_email = client.email
+
+            # Find and toggle the client
+            for c in clients:
+                if c.get("email") == search_email:
+                    c["enable"] = enable
+                    break
+
+            settings["clients"] = clients
+
+            # Update inbound
+            update_data = {
+                "up": inbound["up"],
+                "down": inbound["down"],
+                "total": inbound["total"],
+                "remark": inbound["remark"],
+                "enable": inbound["enable"],
+                "expiryTime": inbound["expiryTime"],
+                "listen": inbound.get("listen", ""),
+                "port": inbound["port"],
+                "protocol": inbound["protocol"],
+                "settings": json.dumps(settings),
+                "streamSettings": inbound["streamSettings"],
+                "sniffing": inbound["sniffing"]
+            }
+
+            update_response = session.post(
+                f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                json=update_data,
+                verify=False,
+                timeout=10
+            )
+
+            if update_response.status_code != 200:
+                errors.append(f"{node.name}: Update failed")
+
+        except Exception as e:
+            errors.append(f"{node.name}: {str(e)}")
+
+    db.commit()
+
+    action = "enabled" if enable else "disabled"
+    print(f"User {user.telegram_id} ({user.name}) {action}")
+
+    return {
+        "message": f"User {action} successfully",
+        "telegram_id": telegram_id,
+        "enabled": enable,
+        "errors": errors if errors else None
+    }
+
+
 @app.post("/api/admin/check-renewals")
 async def check_renewals(request: Request, db: Session = Depends(get_db)):
     """Check all users and disable those past renewal_date"""
