@@ -1,6 +1,6 @@
 """Database models and connection for admin service"""
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Date, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -12,6 +12,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localho
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+# Payment status constants
+class PaymentStatus:
+    TEST = 1           # Тест
+    PAID = 2           # Оплатил
+    NOT_PAID = 3       # Не оплатил
+    PROMO = 4          # Промокод
 
 
 class Node(Base):
@@ -29,16 +37,36 @@ class Node(Base):
     keys = relationship("Key", back_populates="node", cascade="all, delete-orphan")
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    name = Column(String(255))
+    payment_status = Column(Integer, default=PaymentStatus.TEST)
+    limit_ip = Column(Integer, default=0)  # 0 = unlimited
+    tag = Column(String(100))
+    payment_date = Column(Date)
+    renewal_date = Column(Date)  # For TEST users: created_at + 72 hours
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 1:1 relationship with Client
+    client = relationship("Client", back_populates="user", uselist=False)
+
+
 class Client(Base):
     __tablename__ = "clients"
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     enabled = Column(Boolean, default=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     keys = relationship("Key", back_populates="client", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="client")
 
 
 class Key(Base):

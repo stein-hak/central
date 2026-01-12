@@ -294,6 +294,7 @@
         <div class="tabs">
             <button class="tab active" onclick="switchTab('nodes')" data-i18n="tab_nodes">Nodes</button>
             <button class="tab" onclick="switchTab('clients')" data-i18n="tab_clients">Clients</button>
+            <button class="tab" onclick="switchTab('users')" data-i18n="tab_users">Users</button>
             <button class="tab" onclick="switchTab('backups')" data-i18n="tab_backups">Backups</button>
         </div>
 
@@ -395,6 +396,45 @@
                             <th data-i18n="th_ip_limit">IP Limit</th>
                             <th data-i18n="th_keys">Keys</th>
                             <th data-i18n="th_created">Created</th>
+                            <th data-i18n="th_actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Users Tab -->
+        <div id="users-tab" class="tab-content">
+            <div class="card">
+                <h2 data-i18n="add_user">Add New User</h2>
+                <form id="add-user-form" onsubmit="addUser(event)">
+                    <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+                    <input type="text" name="name" placeholder="Name">
+                    <select name="payment_status">
+                        <option value="1">Test</option>
+                        <option value="2">Paid</option>
+                        <option value="3">Not Paid</option>
+                        <option value="4">Promo</option>
+                    </select>
+                    <input type="number" name="limit_ip" placeholder="IP Limit (0 = unlimited)" value="0">
+                    <input type="text" name="tag" placeholder="Tag (optional)">
+                    <button type="submit" class="btn btn-primary" data-i18n="btn_add_user">Add User</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2 data-i18n="users_list">Users</h2>
+                <table id="usersTable">
+                    <thead>
+                        <tr>
+                            <th data-i18n="th_telegram_id">Telegram ID</th>
+                            <th data-i18n="th_name">Name</th>
+                            <th data-i18n="th_email">Email</th>
+                            <th data-i18n="th_payment_status">Payment</th>
+                            <th data-i18n="th_limit_ip">IP Limit</th>
+                            <th data-i18n="th_renewal_date">Renewal Date</th>
                             <th data-i18n="th_actions">Actions</th>
                         </tr>
                     </thead>
@@ -603,6 +643,7 @@
                 logout: 'Logout',
                 tab_nodes: 'Nodes',
                 tab_clients: 'Clients',
+                tab_users: 'Users',
                 tab_backups: 'Backups',
                 add_node: 'Add New Node',
                 node_name: 'Node Name',
@@ -694,13 +735,29 @@
                 btn_update_limit: 'Update Limit',
                 loading: 'Loading...',
                 ip_limit_unlimited: 'Unlimited',
-                alert_limit_updated: 'IP limit updated successfully'
+                alert_limit_updated: 'IP limit updated successfully',
+                add_user: 'Add New User',
+                users_list: 'Users',
+                th_telegram_id: 'Telegram ID',
+                th_payment_status: 'Payment',
+                th_renewal_date: 'Renewal Date',
+                btn_add_user: 'Add User',
+                btn_sub_link: 'Sub Link',
+                btn_edit_user: 'Edit',
+                confirm_delete_user: 'Delete this user? This will also delete their subscription and keys from all nodes.',
+                alert_user_created: 'User created successfully',
+                alert_user_deleted: 'User deleted successfully',
+                payment_status_test: 'Test',
+                payment_status_paid: 'Paid',
+                payment_status_not_paid: 'Not Paid',
+                payment_status_promo: 'Promo'
             },
             ru: {
                 title: 'Менеджер подписок',
                 logout: 'Выход',
                 tab_nodes: 'Узлы',
                 tab_clients: 'Клиенты',
+                tab_users: 'Пользователи',
                 tab_backups: 'Резервные копии',
                 add_node: 'Добавить новый узел',
                 node_name: 'Имя узла',
@@ -792,7 +849,22 @@
                 btn_update_limit: 'Обновить лимит',
                 loading: 'Загрузка...',
                 ip_limit_unlimited: 'Без ограничений',
-                alert_limit_updated: 'Лимит IP успешно обновлен'
+                alert_limit_updated: 'Лимит IP успешно обновлен',
+                add_user: 'Добавить нового пользователя',
+                users_list: 'Пользователи',
+                th_telegram_id: 'Telegram ID',
+                th_payment_status: 'Оплата',
+                th_renewal_date: 'Дата продления',
+                btn_add_user: 'Добавить пользователя',
+                btn_sub_link: 'Ссылка',
+                btn_edit_user: 'Изменить',
+                confirm_delete_user: 'Удалить этого пользователя? Это также удалит его подписку и ключи со всех узлов.',
+                alert_user_created: 'Пользователь успешно создан',
+                alert_user_deleted: 'Пользователь успешно удален',
+                payment_status_test: 'Тест',
+                payment_status_paid: 'Оплатил',
+                payment_status_not_paid: 'Не оплатил',
+                payment_status_promo: 'Промокод'
             }
         };
 
@@ -850,6 +922,7 @@
 
             if (tab === 'nodes') loadNodes();
             if (tab === 'clients') loadClients();
+            if (tab === 'users') loadUsers();
             if (tab === 'backups') loadBackups();
         }
 
@@ -1511,6 +1584,118 @@
             } finally {
                 btn.disabled = false;
                 progress.style.display = 'none';
+            }
+        }
+
+        // ====================================================================
+        // User Management Functions
+        // ====================================================================
+
+        async function loadUsers() {
+            const response = await fetch('/api/users');
+            const data = await response.json();
+            const users = data.users || [];
+
+            const tbody = document.querySelector('#usersTable tbody');
+            tbody.innerHTML = '';
+
+            const paymentStatusMap = {
+                1: translations[currentLang].payment_status_test,
+                2: translations[currentLang].payment_status_paid,
+                3: translations[currentLang].payment_status_not_paid,
+                4: translations[currentLang].payment_status_promo
+            };
+
+            users.forEach(user => {
+                const row = document.createElement('tr');
+
+                const paymentStatus = paymentStatusMap[user.payment_status] || user.payment_status;
+                const ipLimit = user.limit_ip === 0 ? translations[currentLang].ip_limit_unlimited : user.limit_ip;
+                const renewalDate = user.renewal_date || '-';
+
+                row.innerHTML = `
+                    <td>${user.telegram_id}</td>
+                    <td>${user.name || '-'}</td>
+                    <td style="font-family: monospace; font-size: 12px;">${user.client_email || '-'}</td>
+                    <td>${paymentStatus}</td>
+                    <td>${ipLimit}</td>
+                    <td>${renewalDate}</td>
+                    <td>
+                        ${user.subscription_url ? `
+                            <button class="btn" style="background: #3498db; color: white;"
+                                onclick="showSubModal('${user.subscription_url}')">
+                                ${translations[currentLang].btn_sub_link}
+                            </button>
+                        ` : ''}
+                        <button class="btn" style="background: #e74c3c; color: white;"
+                            onclick="deleteUser(${user.telegram_id})">
+                            ${translations[currentLang].btn_delete}
+                        </button>
+                    </td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        async function addUser(event) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+
+            const data = {
+                telegram_id: parseInt(formData.get('telegram_id')),
+                name: formData.get('name'),
+                payment_status: parseInt(formData.get('payment_status')),
+                limit_ip: parseInt(formData.get('limit_ip')),
+                tag: formData.get('tag') || null
+            };
+
+            try {
+                const response = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(translations[currentLang].alert_user_created);
+                    form.reset();
+                    loadUsers();
+
+                    // Show any errors from key creation
+                    if (result.errors && result.errors.length > 0) {
+                        console.warn('Some keys failed to create:', result.errors);
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`${translations[currentLang].alert_error}: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
+            }
+        }
+
+        async function deleteUser(telegram_id) {
+            if (!confirm(translations[currentLang].confirm_delete_user)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/users/${telegram_id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    alert(translations[currentLang].alert_user_deleted);
+                    loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert(`${translations[currentLang].alert_error}: ${error.detail}`);
+                }
+            } catch (error) {
+                alert(`${translations[currentLang].alert_error}: ${error.message}`);
             }
         }
 

@@ -4,8 +4,9 @@ import uuid
 import json
 import time
 import secrets
-from typing import List
+from typing import List, Optional
 from urllib.parse import unquote
+from datetime import datetime, timedelta, date
 from fastapi import FastAPI, Depends, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -13,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import requests
 
-from database import get_db, Node, Client, Key, engine, Base
+from database import get_db, Node, Client, Key, User, PaymentStatus, engine, Base
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -1830,6 +1831,455 @@ async def restore_backup(request: Request, backup_id: str, db: Session = Depends
     return {
         "success": False,
         "message": "Restore functionality not yet implemented. Please restore manually for safety."
+    }
+
+
+# ============================================================================
+# User Management API
+# ============================================================================
+
+@app.get("/api/users")
+async def get_users(request: Request, db: Session = Depends(get_db)):
+    """Get all users"""
+    check_auth(request)
+
+    users = db.query(User).all()
+
+    result = []
+    for user in users:
+        user_data = {
+            "id": user.id,
+            "telegram_id": user.telegram_id,
+            "name": user.name,
+            "payment_status": user.payment_status,
+            "limit_ip": user.limit_ip,
+            "tag": user.tag,
+            "payment_date": user.payment_date.isoformat() if user.payment_date else None,
+            "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+            "subscription_url": None,
+            "client_email": None
+        }
+
+        # Get associated client info
+        if user.client:
+            subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+            user_data["subscription_url"] = f"{subscription_base}/sub/{user.client.email}"
+            user_data["client_email"] = user.client.email
+
+        result.append(user_data)
+
+    return {"users": result}
+
+
+@app.get("/api/users/{telegram_id}")
+async def get_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
+    """Get specific user by telegram_id"""
+    check_auth(request)
+
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_data = {
+        "id": user.id,
+        "telegram_id": user.telegram_id,
+        "name": user.name,
+        "payment_status": user.payment_status,
+        "limit_ip": user.limit_ip,
+        "tag": user.tag,
+        "payment_date": user.payment_date.isoformat() if user.payment_date else None,
+        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        "subscription_url": None,
+        "client_email": None
+    }
+
+    # Get associated client info
+    if user.client:
+        subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+        user_data["subscription_url"] = f"{subscription_base}/sub/{user.client.email}"
+        user_data["client_email"] = user.client.email
+
+    return user_data
+
+
+@app.post("/api/users")
+async def create_user(request: Request, db: Session = Depends(get_db)):
+    """Create new user with subscription and keys on all nodes"""
+    check_auth(request)
+
+    data = await request.json()
+
+    telegram_id = data.get("telegram_id")
+    name = data.get("name")
+    payment_status = data.get("payment_status", PaymentStatus.TEST)
+    limit_ip = data.get("limit_ip", 0)
+    tag = data.get("tag")
+
+    if not telegram_id:
+        raise HTTPException(status_code=400, detail="telegram_id is required")
+
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User with this telegram_id already exists")
+
+    # Create user
+    user = User(
+        telegram_id=telegram_id,
+        name=name,
+        payment_status=payment_status,
+        limit_ip=limit_ip,
+        tag=tag,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    # Set renewal_date for TEST users (72 hours from now)
+    if payment_status == PaymentStatus.TEST:
+        user.renewal_date = datetime.utcnow().date() + timedelta(hours=72)
+
+    db.add(user)
+    db.flush()  # Get user.id
+
+    # Generate unique client email
+    client_uuid = str(uuid.uuid4())[:8]
+    client_email = f"Client-{client_uuid}@gorillaerror.com"
+
+    # Create client
+    client = Client(
+        email=client_email,
+        enabled=True,
+        user_id=user.id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    db.add(client)
+    db.flush()  # Get client.id
+
+    # Get all enabled nodes
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+
+    if not nodes:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="No enabled nodes available")
+
+    # Create keys on all nodes
+    keys_created = []
+    errors = []
+
+    for node in nodes:
+        try:
+            # Login to node
+            session = requests.Session()
+            login_data = {"username": node.username, "password": node.password}
+            login_response = session.post(
+                f"{node.url}/login",
+                data=login_data,
+                verify=False,
+                timeout=10
+            )
+
+            if login_response.status_code != 200:
+                errors.append(f"{node.name}: Login failed")
+                continue
+
+            # Get inbounds list
+            inbounds_response = session.post(
+                f"{node.url}/panel/api/inbounds/list",
+                verify=False,
+                timeout=10
+            )
+
+            if inbounds_response.status_code != 200:
+                errors.append(f"{node.name}: Failed to get inbounds")
+                continue
+
+            inbounds = inbounds_response.json().get("obj", [])
+
+            # Find gRPC and XHTTP inbounds
+            grpc_inbound = None
+            xhttp_inbound = None
+
+            for inbound in inbounds:
+                remark = inbound.get("remark", "").lower()
+                if "grpc" in remark:
+                    grpc_inbound = inbound
+                elif "xhttp" in remark:
+                    xhttp_inbound = inbound
+
+            # Add client to both inbounds
+            for inbound, transport in [(grpc_inbound, "gRPC"), (xhttp_inbound, "XHTTP")]:
+                if not inbound:
+                    errors.append(f"{node.name}: {transport} inbound not found")
+                    continue
+
+                # Generate UUID for this key
+                key_uuid = uuid.uuid4()
+
+                # Determine email suffix
+                email_suffix = "-xhttp" if transport == "XHTTP" else ""
+                full_email = f"{client_email}{email_suffix}"
+
+                # Prepare client data
+                settings = json.loads(inbound["settings"])
+                clients = settings.get("clients", [])
+
+                new_client = {
+                    "id": str(key_uuid),
+                    "flow": "xtls-rprx-vision" if transport == "gRPC" else "",
+                    "email": full_email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": ""
+                }
+
+                clients.append(new_client)
+                settings["clients"] = clients
+
+                # Update inbound
+                update_data = {
+                    "up": inbound["up"],
+                    "down": inbound["down"],
+                    "total": inbound["total"],
+                    "remark": inbound["remark"],
+                    "enable": inbound["enable"],
+                    "expiryTime": inbound["expiryTime"],
+                    "listen": inbound.get("listen", ""),
+                    "port": inbound["port"],
+                    "protocol": inbound["protocol"],
+                    "settings": json.dumps(settings),
+                    "streamSettings": inbound["streamSettings"],
+                    "sniffing": inbound["sniffing"]
+                }
+
+                update_response = session.post(
+                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                    json=update_data,
+                    verify=False,
+                    timeout=10
+                )
+
+                if update_response.status_code == 200:
+                    # Create VLESS URL
+                    stream_settings = json.loads(inbound["streamSettings"])
+
+                    if transport == "gRPC":
+                        service_name = stream_settings.get("grpcSettings", {}).get("serviceName", "")
+                        vless_url = f"vless://{key_uuid}@{node.domain}:443?type=grpc&serviceName={service_name}&security=tls&sni={node.domain}&fp=chrome#{node.name}-gRPC"
+                    else:  # XHTTP
+                        path = stream_settings.get("xhttpSettings", {}).get("path", "/")
+                        vless_url = f"vless://{key_uuid}@{node.domain}:443?type=xhttp&path={path}&security=reality&sni=www.samsung.com&fp=chrome&pbk=SbVKoAarReR_uuid4jMGlV40FUqPO7l5C0QaveI8UV0&sid=6ba85179e30d4fc2#{node.name}-XHTTP"
+
+                    # Save key to database
+                    key = Key(
+                        client_id=client.id,
+                        node_id=node.id,
+                        inbound_id=inbound["id"],
+                        uuid=key_uuid,
+                        vless_url=vless_url,
+                        manual=False,
+                        created_at=datetime.utcnow()
+                    )
+                    db.add(key)
+                    keys_created.append(f"{node.name}-{transport}")
+                else:
+                    errors.append(f"{node.name}-{transport}: Update failed")
+
+        except Exception as e:
+            errors.append(f"{node.name}: {str(e)}")
+
+    if not keys_created:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create keys on any node. Errors: {'; '.join(errors)}"
+        )
+
+    # Commit everything
+    db.commit()
+    db.refresh(user)
+    db.refresh(client)
+
+    subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+
+    return {
+        "id": user.id,
+        "telegram_id": user.telegram_id,
+        "name": user.name,
+        "payment_status": user.payment_status,
+        "limit_ip": user.limit_ip,
+        "subscription_url": f"{subscription_base}/sub/{client.email}",
+        "client_email": client.email,
+        "keys_created": keys_created,
+        "errors": errors if errors else None,
+        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None
+    }
+
+
+@app.put("/api/users/{telegram_id}")
+async def update_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
+    """Update user information"""
+    check_auth(request)
+
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    data = await request.json()
+
+    # Update allowed fields
+    if "name" in data:
+        user.name = data["name"]
+    if "payment_status" in data:
+        user.payment_status = data["payment_status"]
+    if "limit_ip" in data:
+        user.limit_ip = data["limit_ip"]
+    if "tag" in data:
+        user.tag = data["tag"]
+    if "payment_date" in data:
+        if data["payment_date"]:
+            user.payment_date = date.fromisoformat(data["payment_date"])
+        else:
+            user.payment_date = None
+    if "renewal_date" in data:
+        if data["renewal_date"]:
+            user.renewal_date = date.fromisoformat(data["renewal_date"])
+        else:
+            user.renewal_date = None
+
+    user.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "id": user.id,
+        "telegram_id": user.telegram_id,
+        "name": user.name,
+        "payment_status": user.payment_status,
+        "limit_ip": user.limit_ip,
+        "tag": user.tag,
+        "payment_date": user.payment_date.isoformat() if user.payment_date else None,
+        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+        "updated_at": user.updated_at.isoformat()
+    }
+
+
+@app.delete("/api/users/{telegram_id}")
+async def delete_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
+    """Delete user (cascade deletes client and keys)"""
+    check_auth(request)
+
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get client before deletion for node cleanup
+    client = user.client
+
+    if client:
+        # Get all keys
+        keys = db.query(Key).filter(Key.client_id == client.id).all()
+
+        # Delete from nodes
+        errors = []
+        for key in keys:
+            node = db.query(Node).filter(Node.id == key.node_id).first()
+            if not node:
+                continue
+
+            try:
+                # Login to node
+                session = requests.Session()
+                login_data = {"username": node.username, "password": node.password}
+                login_response = session.post(
+                    f"{node.url}/login",
+                    data=login_data,
+                    verify=False,
+                    timeout=10
+                )
+
+                if login_response.status_code != 200:
+                    errors.append(f"{node.name}: Login failed")
+                    continue
+
+                # Get inbound
+                inbounds_response = session.get(
+                    f"{node.url}/panel/api/inbounds/list",
+                    verify=False,
+                    timeout=10
+                )
+
+                if inbounds_response.status_code != 200:
+                    errors.append(f"{node.name}: Failed to get inbounds")
+                    continue
+
+                inbounds = inbounds_response.json().get("obj", [])
+                inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
+
+                if not inbound:
+                    errors.append(f"{node.name}: Inbound {key.inbound_id} not found")
+                    continue
+
+                # Remove client from settings
+                settings = json.loads(inbound["settings"])
+                clients = settings.get("clients", [])
+
+                # Determine email to search
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    search_email = f"{client.email}-xhttp"
+                else:
+                    search_email = client.email
+
+                # Filter out the client
+                clients = [c for c in clients if c.get("email") != search_email]
+                settings["clients"] = clients
+
+                # Update inbound
+                update_data = {
+                    "up": inbound["up"],
+                    "down": inbound["down"],
+                    "total": inbound["total"],
+                    "remark": inbound["remark"],
+                    "enable": inbound["enable"],
+                    "expiryTime": inbound["expiryTime"],
+                    "listen": inbound.get("listen", ""),
+                    "port": inbound["port"],
+                    "protocol": inbound["protocol"],
+                    "settings": json.dumps(settings),
+                    "streamSettings": inbound["streamSettings"],
+                    "sniffing": inbound["sniffing"]
+                }
+
+                update_response = session.post(
+                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                    json=update_data,
+                    verify=False,
+                    timeout=10
+                )
+
+                if update_response.status_code != 200:
+                    errors.append(f"{node.name}: Update failed")
+
+            except Exception as e:
+                errors.append(f"{node.name}: {str(e)}")
+
+    # Delete from database (cascade will handle client and keys)
+    db.delete(user)
+    db.commit()
+
+    return {
+        "message": "User deleted successfully",
+        "telegram_id": telegram_id,
+        "errors": errors if errors else None
     }
 
 
