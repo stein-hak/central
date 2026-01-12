@@ -1742,6 +1742,28 @@
             }
         }
 
+        function showSubModal(url) {
+            // Set subscription URL
+            document.getElementById('subLink').textContent = url;
+
+            // Clear previous QR code
+            const qrcodeDiv = document.getElementById('qrcode');
+            qrcodeDiv.innerHTML = '';
+
+            // Generate new QR code
+            new QRCode(qrcodeDiv, {
+                text: url,
+                width: 256,
+                height: 256,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.H
+            });
+
+            // Show modal
+            document.getElementById('subModal').classList.add('active');
+        }
+
         async function loadBackups() {
             try {
                 const response = await fetch('/api/admin/backups');
