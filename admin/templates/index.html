@@ -1625,6 +1625,14 @@
                 const row = document.createElement('tr');
 
                 const paymentStatus = paymentStatusMap[user.payment_status] || user.payment_status;
+
+                // Color code payment status
+                let paymentColor = '#95a5a6'; // default gray
+                if (user.payment_status === 1) paymentColor = '#f39c12'; // TEST = orange
+                else if (user.payment_status === 2) paymentColor = '#27ae60'; // PAID = green
+                else if (user.payment_status === 3) paymentColor = '#e74c3c'; // NOT_PAID = red
+                else if (user.payment_status === 4) paymentColor = '#9b59b6'; // PROMO = purple
+
                 const ipLimit = user.limit_ip === 0 ? translations[currentLang].ip_limit_unlimited : user.limit_ip;
                 const renewalDate = user.renewal_date || '-';
                 const statusText = user.enabled ? translations[currentLang].status_enabled : translations[currentLang].status_disabled;
@@ -1634,7 +1642,7 @@
                     <td>${user.telegram_id}</td>
                     <td>${user.name || '-'}</td>
                     <td style="font-family: monospace; font-size: 12px;">${user.client_email || '-'}</td>
-                    <td>${paymentStatus}</td>
+                    <td style="color: ${paymentColor}; font-weight: bold;">${paymentStatus}</td>
                     <td style="color: ${statusColor}; font-weight: bold;">${statusText}</td>
                     <td>${renewalDate}</td>
                     <td>
