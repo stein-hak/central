@@ -5,6 +5,7 @@ import json
 import time
 import secrets
 from typing import List
+from urllib.parse import unquote
 from fastapi import FastAPI, Depends, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -1146,6 +1147,8 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
             # Format: vless://uuid@domain:port?...#email
             try:
                 email = key.vless_url.split('#')[-1]
+                # Decode URL-encoded email (e.g., %20 -> space, %F0%9F%87 -> emoji)
+                email = unquote(email)
             except:
                 email = client.email
 
@@ -1303,6 +1306,8 @@ async def update_client_limit(request: Request, client_id: int, db: Session = De
                 # Format: vless://uuid@domain:port?...#email
                 try:
                     email = key.vless_url.split('#')[-1]
+                    # Decode URL-encoded email
+                    email = unquote(email)
                     client_emails.add(email)
                 except:
                     pass
