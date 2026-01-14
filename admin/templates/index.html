@@ -402,6 +402,22 @@
                     <tbody>
                     </tbody>
                 </table>
+
+                <!-- Pagination for Clients -->
+                <div id="clientsPagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+                    <div style="color: #7f8c8d;">
+                        <span id="clientsInfo">Showing 0-0 of 0</span>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn" onclick="changeClientsPage(-1)" id="clientsPrevBtn" style="background: #95a5a6; color: white;">
+                            Previous
+                        </button>
+                        <span id="clientsPageInfo" style="padding: 8px 15px; color: #2c3e50;">Page 1 of 1</span>
+                        <button class="btn" onclick="changeClientsPage(1)" id="clientsNextBtn" style="background: #667eea; color: white;">
+                            Next
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -446,6 +462,22 @@
                     <tbody>
                     </tbody>
                 </table>
+
+                <!-- Pagination for Users -->
+                <div id="usersPagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+                    <div style="color: #7f8c8d;">
+                        <span id="usersInfo">Showing 0-0 of 0</span>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn" onclick="changeUsersPage(-1)" id="usersPrevBtn" style="background: #95a5a6; color: white;">
+                            Previous
+                        </button>
+                        <span id="usersPageInfo" style="padding: 8px 15px; color: #2c3e50;">Page 1 of 1</span>
+                        <button class="btn" onclick="changeUsersPage(1)" id="usersNextBtn" style="background: #667eea; color: white;">
+                            Next
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1111,9 +1143,16 @@
         }
 
         // Load clients
-        async function loadClients() {
-            const response = await fetch('/api/clients');
-            const clients = await response.json();
+        let currentClientsPage = 1;
+        const clientsPerPage = 50;
+
+        async function loadClients(page = 1) {
+            currentClientsPage = page;
+            const response = await fetch(`/api/clients?page=${page}&limit=${clientsPerPage}`);
+            const data = await response.json();
+            const clients = data.clients || [];
+            const total = data.total || 0;
+            const totalPages = data.total_pages || 1;
 
             const tbody = document.querySelector('#clientsTable tbody');
             tbody.innerHTML = '';
@@ -1148,8 +1187,25 @@
                 tbody.appendChild(tr);
             });
 
+            // Update pagination info
+            const startIndex = (currentClientsPage - 1) * clientsPerPage + 1;
+            const endIndex = Math.min(currentClientsPage * clientsPerPage, total);
+            document.getElementById('clientsInfo').textContent = `Showing ${startIndex}-${endIndex} of ${total}`;
+            document.getElementById('clientsPageInfo').textContent = `Page ${currentClientsPage} of ${totalPages}`;
+
+            // Enable/disable pagination buttons
+            document.getElementById('clientsPrevBtn').disabled = currentClientsPage === 1;
+            document.getElementById('clientsNextBtn').disabled = currentClientsPage === totalPages;
+
             // Reset batch delete button
             updateBatchDeleteBtn();
+        }
+
+        function changeClientsPage(direction) {
+            const newPage = currentClientsPage + direction;
+            if (newPage >= 1) {
+                loadClients(newPage);
+            }
         }
 
         // Client search filter
@@ -1606,10 +1662,16 @@
         // User Management Functions
         // ====================================================================
 
-        async function loadUsers() {
-            const response = await fetch('/api/users');
+        let currentUsersPage = 1;
+        const usersPerPage = 50;
+
+        async function loadUsers(page = 1) {
+            currentUsersPage = page;
+            const response = await fetch(`/api/users?page=${page}&limit=${usersPerPage}`);
             const data = await response.json();
             const users = data.users || [];
+            const total = data.total || 0;
+            const totalPages = data.total_pages || 1;
 
             const tbody = document.querySelector('#usersTable tbody');
             tbody.innerHTML = '';
@@ -1672,6 +1734,23 @@
 
                 tbody.appendChild(row);
             });
+
+            // Update pagination info
+            const startIndex = (currentUsersPage - 1) * usersPerPage + 1;
+            const endIndex = Math.min(currentUsersPage * usersPerPage, total);
+            document.getElementById('usersInfo').textContent = `Showing ${startIndex}-${endIndex} of ${total}`;
+            document.getElementById('usersPageInfo').textContent = `Page ${currentUsersPage} of ${totalPages}`;
+
+            // Enable/disable pagination buttons
+            document.getElementById('usersPrevBtn').disabled = currentUsersPage === 1;
+            document.getElementById('usersNextBtn').disabled = currentUsersPage === totalPages;
+        }
+
+        function changeUsersPage(direction) {
+            const newPage = currentUsersPage + direction;
+            if (newPage >= 1) {
+                loadUsers(newPage);
+            }
         }
 
         async function addUser(event) {

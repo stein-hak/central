@@ -862,10 +862,19 @@ async def delete_node(request: Request, node_id: int, db: Session = Depends(get_
 # ============================================================================
 
 @app.get("/api/clients")
-async def get_clients(request: Request, db: Session = Depends(get_db)):
-    """Get all clients"""
+async def get_clients(request: Request, page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
+    """Get clients with pagination"""
     check_auth(request)
-    clients = db.query(Client).all()
+
+    # Get total count
+    total = db.query(Client).count()
+
+    # Calculate offset
+    offset = (page - 1) * limit
+
+    # Get paginated clients, ordered by created_at DESC (newest first)
+    clients = db.query(Client).order_by(Client.created_at.desc()).offset(offset).limit(limit).all()
+
     result = []
     for c in clients:
         keys_count = db.query(Key).filter(Key.client_id == c.id).count()
@@ -876,7 +885,14 @@ async def get_clients(request: Request, db: Session = Depends(get_db)):
             "keys_count": keys_count,
             "created_at": c.created_at.isoformat()
         })
-    return result
+
+    return {
+        "clients": result,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": (total + limit - 1) // limit
+    }
 
 
 @app.post("/api/clients")
@@ -1839,11 +1855,18 @@ async def restore_backup(request: Request, backup_id: str, db: Session = Depends
 # ============================================================================
 
 @app.get("/api/users")
-async def get_users(request: Request, db: Session = Depends(get_db)):
-    """Get all users"""
+async def get_users(request: Request, page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
+    """Get users with pagination"""
     check_auth(request)
 
-    users = db.query(User).all()
+    # Get total count
+    total = db.query(User).count()
+
+    # Calculate offset
+    offset = (page - 1) * limit
+
+    # Get paginated users, ordered by created_at DESC (newest first)
+    users = db.query(User).order_by(User.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
     for user in users:
@@ -1872,7 +1895,13 @@ async def get_users(request: Request, db: Session = Depends(get_db)):
 
         result.append(user_data)
 
-    return {"users": result}
+    return {
+        "users": result,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": (total + limit - 1) // limit  # Ceiling division
+    }
 
 
 @app.get("/api/users/{telegram_id}")
