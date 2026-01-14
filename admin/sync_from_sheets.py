@@ -42,14 +42,28 @@ PAYMENT_STATUS_NAMES = {
 }
 
 def parse_date(date_str):
-    """Parse date from various formats: 05.05.2023, 1.11.2023, 20.08.2024"""
+    """Parse date from various formats: 05.05.2023, 1.11.2023, 20.08.2024, 01.09.26"""
     if not date_str or date_str.strip() in ["", "—", "-"]:
         return None
 
     date_str = date_str.strip()
 
+    # Normalize the date: ensure zero-padding for day and month
+    # Handle formats like "1.12.2025", "25.1.2026", "01.09.26"
+    if "." in date_str:
+        parts = date_str.split(".")
+        if len(parts) == 3:
+            day, month, year = parts
+            # Zero-pad day and month
+            day = day.zfill(2)
+            month = month.zfill(2)
+            # Expand 2-digit year to 4-digit
+            if len(year) == 2:
+                year = "20" + year
+            date_str = f"{day}.{month}.{year}"
+
     # Try different date formats
-    formats = ["%d.%m.%Y", "%d.%m.%y", "%d/%m/%Y", "%d/%m/%y"]
+    formats = ["%d.%m.%Y", "%d/%m/%Y"]
 
     for fmt in formats:
         try:
@@ -265,6 +279,22 @@ def update_user(api_url, session_id, telegram_id, user_data, dry_run=False):
     else:
         raise Exception(f"API error {response.status_code}: {response.text}")
 
+def disable_user(api_url, session_id, telegram_id, dry_run=False):
+    """Disable user (syncs to all nodes)"""
+    if dry_run:
+        return {"status": "dry_run"}
+
+    response = requests.post(
+        f"{api_url}/api/users/{telegram_id}/toggle",
+        json={"enabled": False},
+        cookies={"session_id": session_id}
+    )
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"API error {response.status_code}: {response.text}")
+
 def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
     """Sync users to Central API"""
     print(f"\n{'='*70}")
@@ -301,6 +331,8 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
         "created": 0,
         "updated": 0,
         "unchanged": 0,
+        "disabled": 0,
+        "enabled": 0,
         "errors": []
     }
 
@@ -331,6 +363,37 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
                     }
                     update_user(api_url, session_id, telegram_id, update_data, dry_run)
                     sync_stats["updated"] += 1
+
+                    # Check if payment status changed and needs enable/disable
+                    old_status = existing["payment_status"]
+                    new_status = user["payment_status"]
+
+                    # If changed to NOT_PAID, disable
+                    if old_status != 3 and new_status == 3:
+                        print(f"   🔒 Disabling (payment status changed to NOT_PAID)...")
+                        try:
+                            disable_user(api_url, session_id, telegram_id, dry_run)
+                            sync_stats["disabled"] += 1
+                        except Exception as e:
+                            print(f"   ⚠️  Warning: Updated but failed to disable: {e}")
+                            sync_stats["errors"].append(f"Disable {telegram_id}: {e}")
+
+                    # If changed from NOT_PAID to PAID/TEST/PROMO, enable
+                    elif old_status == 3 and new_status != 3:
+                        print(f"   🔓 Enabling (payment status changed from NOT_PAID)...")
+                        try:
+                            response = requests.post(
+                                f"{api_url}/api/users/{telegram_id}/toggle",
+                                json={"enabled": True},
+                                cookies={"session_id": session_id}
+                            )
+                            if not dry_run and response.status_code != 200:
+                                raise Exception(f"API error {response.status_code}")
+                            sync_stats["enabled"] += 1
+                        except Exception as e:
+                            print(f"   ⚠️  Warning: Updated but failed to enable: {e}")
+                            sync_stats["errors"].append(f"Enable {telegram_id}: {e}")
+
                 except Exception as e:
                     print(f"   ❌ Error: {e}")
                     sync_stats["errors"].append(f"Update {telegram_id}: {e}")
@@ -338,10 +401,22 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
                 sync_stats["unchanged"] += 1
         else:
             # Create new user
-            print(f"✨ Creating telegram_id={telegram_id}, client={client_email}")
+            payment_status = user["payment_status"]
+            status_label = "NOT_PAID" if payment_status == 3 else ("TEST" if payment_status == 1 else ("PROMO" if payment_status == 4 else "PAID"))
+            print(f"✨ Creating telegram_id={telegram_id}, client={client_email}, status={status_label}")
             try:
                 create_user(api_url, session_id, user, dry_run)
                 sync_stats["created"] += 1
+
+                # If NOT_PAID, disable the client (syncs to all nodes)
+                if payment_status == 3:  # NOT_PAID
+                    print(f"   🔒 Disabling NOT_PAID user...")
+                    try:
+                        disable_user(api_url, session_id, telegram_id, dry_run)
+                        sync_stats["disabled"] += 1
+                    except Exception as e:
+                        print(f"   ⚠️  Warning: Created user but failed to disable: {e}")
+                        sync_stats["errors"].append(f"Disable {telegram_id}: {e}")
             except Exception as e:
                 print(f"   ❌ Error: {e}")
                 sync_stats["errors"].append(f"Create {telegram_id}: {e}")
@@ -357,6 +432,9 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
     print(f"✨ Created: {sync_stats['created']}")
     print(f"🔄 Updated: {sync_stats['updated']}")
     print(f"⏭️  Unchanged: {sync_stats['unchanged']}")
+    if sync_stats['disabled'] > 0 or sync_stats['enabled'] > 0:
+        print(f"\n🔒 Disabled (NOT_PAID): {sync_stats['disabled']}")
+        print(f"🔓 Enabled (PAID/TEST/PROMO): {sync_stats['enabled']}")
 
     if sync_stats["errors"]:
         print(f"\n❌ Errors ({len(sync_stats['errors'])}):")
