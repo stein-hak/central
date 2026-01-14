@@ -202,12 +202,28 @@ def preview_mode(sheets_url):
     print("💡 To sync these users to the API, run:")
     print(f"   python sync_from_sheets.py \"<url>\" --api-url http://localhost:8000\n")
 
-def get_existing_users(api_url, admin_password):
+def login_to_api(api_url, admin_password):
+    """Login to API and get session cookie"""
+    response = requests.post(
+        f"{api_url}/login",
+        data={"password": admin_password},
+        allow_redirects=False
+    )
+    if response.status_code not in [200, 302]:
+        raise Exception(f"Login failed: {response.status_code}")
+
+    session_id = response.cookies.get("session_id")
+    if not session_id:
+        raise Exception("No session_id cookie received after login")
+
+    return session_id
+
+def get_existing_users(api_url, session_id):
     """Get all existing users from API"""
     print(f"📋 Fetching existing users from API...")
     response = requests.get(
         f"{api_url}/api/users",
-        cookies={"admin_session": admin_password}
+        cookies={"session_id": session_id}
     )
     response.raise_for_status()
     users = response.json()
@@ -216,7 +232,7 @@ def get_existing_users(api_url, admin_password):
     # Create lookup by telegram_id
     return {user["telegram_id"]: user for user in users}
 
-def create_user(api_url, admin_password, user_data, dry_run=False):
+def create_user(api_url, session_id, user_data, dry_run=False):
     """Create new user via API"""
     if dry_run:
         return {"status": "dry_run"}
@@ -224,7 +240,7 @@ def create_user(api_url, admin_password, user_data, dry_run=False):
     response = requests.post(
         f"{api_url}/api/users",
         json=user_data,
-        cookies={"admin_session": admin_password}
+        cookies={"session_id": session_id}
     )
 
     if response.status_code in [200, 201]:
@@ -232,7 +248,7 @@ def create_user(api_url, admin_password, user_data, dry_run=False):
     else:
         raise Exception(f"API error {response.status_code}: {response.text}")
 
-def update_user(api_url, admin_password, telegram_id, user_data, dry_run=False):
+def update_user(api_url, session_id, telegram_id, user_data, dry_run=False):
     """Update existing user via API"""
     if dry_run:
         return {"status": "dry_run"}
@@ -240,7 +256,7 @@ def update_user(api_url, admin_password, telegram_id, user_data, dry_run=False):
     response = requests.put(
         f"{api_url}/api/users/{telegram_id}",
         json=user_data,
-        cookies={"admin_session": admin_password}
+        cookies={"session_id": session_id}
     )
 
     if response.status_code == 200:
@@ -257,6 +273,11 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
     print(f"API URL: {api_url}")
     print(f"{'='*70}\n")
 
+    # Login to API
+    print(f"🔐 Logging in to API...")
+    session_id = login_to_api(api_url, admin_password)
+    print(f"   ✅ Authenticated\n")
+
     # Fetch CSV
     csv_content = fetch_csv_from_url(sheets_url)
 
@@ -264,7 +285,7 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
     users, parse_stats = parse_users_from_csv(csv_content)
 
     # Get existing users from API
-    existing_users = get_existing_users(api_url, admin_password)
+    existing_users = get_existing_users(api_url, session_id)
 
     # Sync
     sync_stats = {
@@ -299,7 +320,7 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
                         "payment_date": user["payment_date"],
                         "renewal_date": user["renewal_date"]
                     }
-                    update_user(api_url, admin_password, telegram_id, update_data, dry_run)
+                    update_user(api_url, session_id, telegram_id, update_data, dry_run)
                     sync_stats["updated"] += 1
                 except Exception as e:
                     print(f"   ❌ Error: {e}")
@@ -310,7 +331,7 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
             # Create new user
             print(f"✨ Creating telegram_id={telegram_id}, client={client_email}")
             try:
-                create_user(api_url, admin_password, user, dry_run)
+                create_user(api_url, session_id, user, dry_run)
                 sync_stats["created"] += 1
             except Exception as e:
                 print(f"   ❌ Error: {e}")
