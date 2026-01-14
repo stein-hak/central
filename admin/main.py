@@ -2305,6 +2305,63 @@ async def update_user(request: Request, telegram_id: int, db: Session = Depends(
     }
 
 
+@app.put("/api/users/{telegram_id}")
+async def update_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
+    """Update user data (payment status, dates, limits, etc.)
+
+    Does NOT modify client relationship or keys - use POST/DELETE for that
+    """
+    check_auth(request)
+
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    data = await request.json()
+
+    # Update fields if provided
+    if "name" in data:
+        user.name = data["name"]
+
+    if "payment_status" in data:
+        user.payment_status = int(data["payment_status"])
+
+    if "limit_ip" in data:
+        user.limit_ip = int(data["limit_ip"])
+
+    if "tag" in data:
+        user.tag = data["tag"]
+
+    if "payment_date" in data:
+        if data["payment_date"]:
+            user.payment_date = datetime.fromisoformat(data["payment_date"]).date()
+        else:
+            user.payment_date = None
+
+    if "renewal_date" in data:
+        if data["renewal_date"]:
+            user.renewal_date = datetime.fromisoformat(data["renewal_date"]).date()
+        else:
+            user.renewal_date = None
+
+    user.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "id": user.id,
+        "telegram_id": user.telegram_id,
+        "name": user.name,
+        "payment_status": user.payment_status,
+        "limit_ip": user.limit_ip,
+        "tag": user.tag,
+        "payment_date": user.payment_date.isoformat() if user.payment_date else None,
+        "renewal_date": user.renewal_date.isoformat() if user.renewal_date else None,
+        "updated_at": user.updated_at.isoformat()
+    }
+
+
 @app.delete("/api/users/{telegram_id}")
 async def delete_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
     """Delete user (cascade deletes client and keys)"""
