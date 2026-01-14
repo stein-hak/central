@@ -265,13 +265,15 @@ def update_user(api_url, session_id, telegram_id, user_data, dry_run=False):
     else:
         raise Exception(f"API error {response.status_code}: {response.text}")
 
-def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
+def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
     """Sync users to Central API"""
     print(f"\n{'='*70}")
     print(f"SYNC MODE - Google Sheets → Central API")
     print(f"{'='*70}")
     print(f"Mode: {'DRY RUN (no changes)' if dry_run else 'LIVE (will modify database)'}")
     print(f"API URL: {api_url}")
+    if limit:
+        print(f"Limit: First {limit} users only")
     print(f"{'='*70}\n")
 
     # Login to API
@@ -284,6 +286,12 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
 
     # Parse users
     users, parse_stats = parse_users_from_csv(csv_content)
+
+    # Limit users if specified
+    total_users = len(users)
+    if limit and limit < total_users:
+        users = users[:limit]
+        print(f"⚠️  Limiting to first {limit} of {total_users} users\n")
 
     # Get existing users from API
     existing_users = get_existing_users(api_url, session_id)
@@ -342,7 +350,10 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False):
     print(f"\n{'='*70}")
     print("SYNC SUMMARY")
     print(f"{'='*70}")
-    print(f"Valid users in sheet: {len(users)}")
+    if limit and limit < total_users:
+        print(f"Valid users in sheet: {total_users} (processed first {len(users)})")
+    else:
+        print(f"Valid users in sheet: {len(users)}")
     print(f"✨ Created: {sync_stats['created']}")
     print(f"🔄 Updated: {sync_stats['updated']}")
     print(f"⏭️  Unchanged: {sync_stats['unchanged']}")
@@ -368,11 +379,12 @@ if __name__ == "__main__":
         print("  python sync_from_sheets.py <google_sheets_csv_url>")
         print()
         print("  # Sync mode (create/update users)")
-        print("  python sync_from_sheets.py <google_sheets_csv_url> --api-url <url> [--dry-run] [--password <pwd>]")
+        print("  python sync_from_sheets.py <google_sheets_csv_url> --api-url <url> [--dry-run] [--password <pwd>] [-n <limit>]")
         print()
         print("Example:")
         print('  python sync_from_sheets.py "https://docs.google.com/.../pub?output=csv&gid=0"')
         print('  python sync_from_sheets.py "https://docs.google.com/.../pub?output=csv&gid=0" --api-url http://localhost:8000 --dry-run')
+        print('  python sync_from_sheets.py "https://docs.google.com/.../pub?output=csv&gid=0" --api-url http://localhost:8000 -n 10 --dry-run')
         sys.exit(1)
 
     sheets_url = sys.argv[1]
@@ -381,17 +393,24 @@ if __name__ == "__main__":
     api_url = None
     admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     dry_run = "--dry-run" in sys.argv
+    limit = None
 
     for i, arg in enumerate(sys.argv):
         if arg == "--api-url" and i + 1 < len(sys.argv):
             api_url = sys.argv[i + 1]
         if arg == "--password" and i + 1 < len(sys.argv):
             admin_password = sys.argv[i + 1]
+        if arg in ["-n", "--limit"] and i + 1 < len(sys.argv):
+            try:
+                limit = int(sys.argv[i + 1])
+            except ValueError:
+                print(f"Error: Invalid limit value: {sys.argv[i + 1]}")
+                sys.exit(1)
 
     try:
         if api_url:
             # Sync mode
-            sync_mode(sheets_url, api_url, admin_password, dry_run)
+            sync_mode(sheets_url, api_url, admin_password, dry_run, limit)
         else:
             # Preview mode
             preview_mode(sheets_url)
