@@ -226,7 +226,8 @@ def get_existing_users(api_url, session_id):
         cookies={"session_id": session_id}
     )
     response.raise_for_status()
-    users = response.json()
+    data = response.json()
+    users = data.get("users", [])  # API returns {"users": [...]}
     print(f"   Found {len(users)} existing users\n")
 
     # Create lookup by telegram_id
