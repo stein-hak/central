@@ -2798,6 +2798,195 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/api/users/batch")
+async def create_users_batch(request: Request, db: Session = Depends(get_db)):
+    """Create multiple users in batch with MASSIVE parallelization
+
+    Creates all users, clients, and keys in one operation.
+    All keys are created on all nodes simultaneously (users × nodes parallel tasks).
+
+    Request body:
+    {
+        "users": [
+            {
+                "telegram_id": 123,
+                "client_email": "Client-abc123",
+                "payment_status": 2,
+                "limit_ip": 0,
+                "tag": "optional",
+                "payment_date": "2025-01-01",
+                "renewal_date": "2025-02-01"
+            },
+            ...
+        ]
+    }
+    """
+    check_auth(request)
+
+    data = await request.json()
+    users_data = data.get("users", [])
+
+    if not users_data:
+        raise HTTPException(status_code=400, detail="No users provided")
+
+    if len(users_data) > 100:
+        raise HTTPException(status_code=400, detail="Maximum 100 users per batch")
+
+    start_time = time.time()
+    print(f"\n🚀 BATCH CREATE: Processing {len(users_data)} users...")
+
+    # Get all enabled nodes upfront
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+    if not nodes:
+        raise HTTPException(status_code=500, detail="No enabled nodes available")
+
+    # Step 1: Create all users and clients in database
+    created_users = []
+    user_client_map = {}  # {client_email: (user, client)}
+
+    for user_data in users_data:
+        telegram_id = user_data.get("telegram_id")
+        client_email = user_data.get("client_email")
+        payment_status = user_data.get("payment_status", PaymentStatus.TEST)
+        limit_ip = user_data.get("limit_ip", 0)
+        tag = user_data.get("tag")
+        payment_date_str = user_data.get("payment_date")
+        renewal_date_str = user_data.get("renewal_date")
+
+        if not telegram_id or not client_email:
+            continue  # Skip invalid entries
+
+        # Check if user already exists
+        existing_user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if existing_user:
+            continue  # Skip existing users
+
+        # Parse dates
+        payment_date = None
+        renewal_date = None
+        if payment_date_str:
+            try:
+                payment_date = datetime.fromisoformat(payment_date_str).date()
+            except:
+                pass
+        if renewal_date_str:
+            try:
+                renewal_date = datetime.fromisoformat(renewal_date_str).date()
+            except:
+                pass
+
+        # Create user
+        user = User(
+            telegram_id=telegram_id,
+            name=client_email,
+            payment_status=payment_status,
+            limit_ip=limit_ip,
+            tag=tag,
+            payment_date=payment_date,
+            renewal_date=renewal_date,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(user)
+        db.flush()
+
+        # Create client
+        client = Client(
+            email=client_email,
+            enabled=payment_status != PaymentStatus.NOT_PAID,
+            user_id=user.id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(client)
+        db.flush()
+
+        created_users.append(user)
+        user_client_map[client_email] = (user, client)
+
+    if not created_users:
+        db.rollback()
+        return {
+            "message": "No new users created (all already exist or invalid)",
+            "created": 0,
+            "total_keys": 0,
+            "elapsed": 0
+        }
+
+    print(f"  ✅ Created {len(created_users)} users/clients in database")
+
+    # Step 2: Create ALL keys for ALL users on ALL nodes in MASSIVE PARALLEL batch
+    print(f"  🚀 Creating keys on {len(nodes)} nodes for {len(created_users)} users ({len(created_users) * len(nodes)} parallel tasks)...")
+
+    all_tasks = []
+    task_metadata = []  # Track which task belongs to which user/node
+
+    for client_email in user_client_map.keys():
+        for node in nodes:
+            all_tasks.append(async_create_keys_on_node(node, client_email, db))
+            task_metadata.append({
+                "client_email": client_email,
+                "node_id": node.id,
+                "node_name": node.name
+            })
+
+    # Execute ALL tasks in parallel
+    key_creation_start = time.time()
+    results = await asyncio.gather(*all_tasks, return_exceptions=True)
+    key_creation_elapsed = time.time() - key_creation_start
+
+    print(f"  ✅ Key creation completed in {key_creation_elapsed:.2f}s")
+
+    # Step 3: Process results and save keys to database
+    total_keys = 0
+    errors = []
+
+    for i, result in enumerate(results):
+        metadata = task_metadata[i]
+        user, client = user_client_map[metadata["client_email"]]
+
+        if isinstance(result, Exception):
+            errors.append(f"{metadata['node_name']}: {str(result)}")
+            continue
+
+        if result["success"]:
+            for key_info in result["keys"]:
+                key = Key(
+                    client_id=client.id,
+                    node_id=metadata["node_id"],
+                    inbound_id=key_info["inbound_id"],
+                    uuid=key_info["uuid"],
+                    vless_url=create_vless_url(
+                        db.query(Node).get(metadata["node_id"]),
+                        metadata["client_email"],
+                        key_info["uuid"],
+                        key_info["inbound_id"],
+                        key_info["transport"].lower()
+                    ),
+                    manual=False,
+                    created_at=datetime.utcnow()
+                )
+                db.add(key)
+                total_keys += 1
+
+        if result.get("errors"):
+            errors.extend([f"{metadata['node_name']}: {err}" for err in result["errors"]])
+
+    # Commit everything
+    db.commit()
+
+    elapsed = time.time() - start_time
+    print(f"✨ BATCH COMPLETE: {len(created_users)} users, {total_keys} keys in {elapsed:.2f}s\n")
+
+    return {
+        "message": f"Batch created {len(created_users)} users",
+        "created": len(created_users),
+        "total_keys": total_keys,
+        "elapsed": elapsed,
+        "errors": errors if errors else None
+    }
+
+
 @app.put("/api/users/{telegram_id}")
 async def update_user(request: Request, telegram_id: int, db: Session = Depends(get_db)):
     """Update user information"""

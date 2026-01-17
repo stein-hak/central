@@ -336,22 +336,35 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
         "errors": []
     }
 
+    # Separate users into updates and creations
+    users_to_update = []
+    users_to_create = []
+
     for user in users:
+        telegram_id = user["telegram_id"]
+        if telegram_id in existing_users:
+            users_to_update.append(user)
+        else:
+            users_to_create.append(user)
+
+    print(f"📊 Planning: {len(users_to_update)} updates, {len(users_to_create)} new users\n")
+
+    # Process updates (sequential)
+    for user in users_to_update:
         telegram_id = user["telegram_id"]
         client_email = user["client_email"]
 
-        if telegram_id in existing_users:
-            # Check if update needed
-            existing = existing_users[telegram_id]
-            changes = []
+        # Check if update needed
+        existing = existing_users[telegram_id]
+        changes = []
 
-            if existing["payment_status"] != user["payment_status"]:
-                changes.append(f"status:{existing['payment_status']}→{user['payment_status']}")
-            # Skip limit_ip check (always 0/unlimited for now)
-            if existing.get("renewal_date") != user["renewal_date"]:
-                changes.append(f"renewal:{existing.get('renewal_date')}→{user['renewal_date']}")
+        if existing["payment_status"] != user["payment_status"]:
+            changes.append(f"status:{existing['payment_status']}→{user['payment_status']}")
+        # Skip limit_ip check (always 0/unlimited for now)
+        if existing.get("renewal_date") != user["renewal_date"]:
+            changes.append(f"renewal:{existing.get('renewal_date')}→{user['renewal_date']}")
 
-            if changes:
+        if changes:
                 print(f"🔄 Updating telegram_id={telegram_id} ({', '.join(changes)})")
                 try:
                     update_data = {
@@ -397,29 +410,75 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
                 except Exception as e:
                     print(f"   ❌ Error: {e}")
                     sync_stats["errors"].append(f"Update {telegram_id}: {e}")
-            else:
-                sync_stats["unchanged"] += 1
         else:
-            # Create new user
-            payment_status = user["payment_status"]
-            status_label = "NOT_PAID" if payment_status == 3 else ("TEST" if payment_status == 1 else ("PROMO" if payment_status == 4 else "PAID"))
-            print(f"✨ Creating telegram_id={telegram_id}, client={client_email}, status={status_label}")
-            try:
-                create_user(api_url, session_id, user, dry_run)
-                sync_stats["created"] += 1
+            sync_stats["unchanged"] += 1
 
-                # If NOT_PAID, disable the client (syncs to all nodes)
-                if payment_status == 3:  # NOT_PAID
-                    print(f"   🔒 Disabling NOT_PAID user...")
-                    try:
-                        disable_user(api_url, session_id, telegram_id, dry_run)
-                        sync_stats["disabled"] += 1
-                    except Exception as e:
-                        print(f"   ⚠️  Warning: Created user but failed to disable: {e}")
-                        sync_stats["errors"].append(f"Disable {telegram_id}: {e}")
+    # Process creations IN BATCHES for massive speedup
+    BATCH_SIZE = 10
+    if users_to_create:
+        print(f"\n🚀 Creating {len(users_to_create)} users in batches of {BATCH_SIZE}...")
+
+        for i in range(0, len(users_to_create), BATCH_SIZE):
+            batch = users_to_create[i:i+BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(users_to_create) + BATCH_SIZE - 1) // BATCH_SIZE
+
+            print(f"\n  📦 Batch {batch_num}/{total_batches} ({len(batch)} users)...")
+
+            if dry_run:
+                print(f"     (DRY RUN - skipping actual creation)")
+                sync_stats["created"] += len(batch)
+                continue
+
+            # Prepare batch data
+            batch_data = {
+                "users": [
+                    {
+                        "telegram_id": u["telegram_id"],
+                        "client_email": u["client_email"],
+                        "payment_status": u["payment_status"],
+                        "limit_ip": u["limit_ip"],
+                        "tag": u.get("tag"),
+                        "payment_date": u.get("payment_date"),
+                        "renewal_date": u.get("renewal_date")
+                    }
+                    for u in batch
+                ]
+            }
+
+            try:
+                response = requests.post(
+                    f"{api_url}/api/users/batch",
+                    json=batch_data,
+                    cookies={"session_id": session_id}
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    created_count = result.get("created", 0)
+                    elapsed = result.get("elapsed", 0)
+                    total_keys = result.get("total_keys", 0)
+
+                    print(f"     ✅ Created {created_count} users with {total_keys} keys in {elapsed:.2f}s")
+                    sync_stats["created"] += created_count
+
+                    # Handle NOT_PAID users (disable them)
+                    for user in batch:
+                        if user["payment_status"] == 3:  # NOT_PAID
+                            telegram_id = user["telegram_id"]
+                            print(f"     🔒 Disabling NOT_PAID user {telegram_id}...")
+                            try:
+                                disable_user(api_url, session_id, telegram_id, dry_run=False)
+                                sync_stats["disabled"] += 1
+                            except Exception as e:
+                                print(f"        ⚠️  Warning: Failed to disable: {e}")
+                                sync_stats["errors"].append(f"Disable {telegram_id}: {e}")
+                else:
+                    raise Exception(f"API error {response.status_code}: {response.text}")
+
             except Exception as e:
-                print(f"   ❌ Error: {e}")
-                sync_stats["errors"].append(f"Create {telegram_id}: {e}")
+                print(f"     ❌ Batch error: {e}")
+                sync_stats["errors"].append(f"Batch {batch_num}: {e}")
 
     # Print summary
     print(f"\n{'='*70}")
