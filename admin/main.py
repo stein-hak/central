@@ -434,6 +434,9 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
     Create keys for a client on a single node (async version).
     Returns: dict with node info, success status, keys created, and any errors
     """
+    start_time = time.time()
+    print(f"  ⏱️  [{node.name}] Starting key creation...")
+
     result = {
         "node_id": node.id,
         "node_name": node.name,
@@ -566,6 +569,10 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
     except Exception as e:
         result["errors"].append(f"Exception: {str(e)}")
 
+    elapsed = time.time() - start_time
+    status = "✅" if result["success"] else "❌"
+    print(f"  {status} [{node.name}] Completed in {elapsed:.2f}s - {len(result['keys'])} keys created")
+
     return result
 
 
@@ -574,6 +581,9 @@ async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, d
     Create keys for a client on all nodes in parallel.
     Returns: List of results from each node
     """
+    start_time = time.time()
+    print(f"\n🚀 Creating keys for '{client_email}' on {len(nodes)} nodes IN PARALLEL...")
+
     tasks = [async_create_keys_on_node(node, client_email, db) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -591,6 +601,11 @@ async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, d
         else:
             processed_results.append(result)
 
+    elapsed = time.time() - start_time
+    success_count = sum(1 for r in processed_results if r["success"])
+    total_keys = sum(len(r["keys"]) for r in processed_results)
+    print(f"✨ TOTAL: {success_count}/{len(nodes)} nodes succeeded, {total_keys} keys created in {elapsed:.2f}s\n")
+
     return processed_results
 
 
@@ -599,6 +614,9 @@ async def async_delete_client_from_node(node: Node, client: Client, db: Session)
     Delete client from a single node (async version).
     Returns: dict with node info, success status, and any errors
     """
+    start_time = time.time()
+    print(f"  ⏱️  [{node.name}] Starting client deletion...")
+
     result = {
         "node_id": node.id,
         "node_name": node.name,
@@ -677,6 +695,10 @@ async def async_delete_client_from_node(node: Node, client: Client, db: Session)
     except Exception as e:
         result["message"] = f"Exception: {str(e)}"
 
+    elapsed = time.time() - start_time
+    status = "✅" if result["success"] else "❌"
+    print(f"  {status} [{node.name}] Completed in {elapsed:.2f}s - {result['message']}")
+
     return result
 
 
@@ -685,6 +707,9 @@ async def async_delete_client_from_all_nodes(nodes: List[Node], client: Client, 
     Delete client from all nodes in parallel.
     Returns: List of results from each node
     """
+    start_time = time.time()
+    print(f"\n🚀 Deleting client '{client.email}' from {len(nodes)} nodes IN PARALLEL...")
+
     tasks = [async_delete_client_from_node(node, client, db) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -701,6 +726,10 @@ async def async_delete_client_from_all_nodes(nodes: List[Node], client: Client, 
         else:
             processed_results.append(result)
 
+    elapsed = time.time() - start_time
+    success_count = sum(1 for r in processed_results if r["success"])
+    print(f"✨ TOTAL: {success_count}/{len(nodes)} nodes succeeded in {elapsed:.2f}s\n")
+
     return processed_results
 
 
@@ -709,6 +738,9 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
     Toggle client enable/disable on a single node (async version).
     Returns: dict with node info, success status, and any errors
     """
+    start_time = time.time()
+    print(f"  ⏱️  [{node.name}] Starting toggle...")
+
     result = {
         "node_id": node.id,
         "node_name": node.name,
@@ -791,6 +823,10 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
     except Exception as e:
         result["message"] = f"Exception: {str(e)}"
 
+    elapsed = time.time() - start_time
+    status = "✅" if result["success"] else "❌"
+    print(f"  {status} [{node.name}] Completed in {elapsed:.2f}s - {result['message']}")
+
     return result
 
 
@@ -799,6 +835,10 @@ async def async_toggle_client_on_all_nodes(nodes: List[Node], client_email: str,
     Toggle client on all nodes in parallel.
     Returns: List of results from each node
     """
+    start_time = time.time()
+    action = "Enabling" if enabled else "Disabling"
+    print(f"\n🚀 {action} client '{client_email}' on {len(nodes)} nodes IN PARALLEL...")
+
     tasks = [async_toggle_client_on_node(node, client_email, enabled, db) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -814,6 +854,10 @@ async def async_toggle_client_on_all_nodes(nodes: List[Node], client_email: str,
             })
         else:
             processed_results.append(result)
+
+    elapsed = time.time() - start_time
+    success_count = sum(1 for r in processed_results if r["success"])
+    print(f"✨ TOTAL: {success_count}/{len(nodes)} nodes succeeded in {elapsed:.2f}s\n")
 
     return processed_results
 
