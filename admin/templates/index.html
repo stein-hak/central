@@ -975,24 +975,51 @@
 
         // Load nodes
         async function loadNodes() {
-            const response = await fetch('/api/nodes');
-            const nodes = await response.json();
+            const nodesResponse = await fetch('/api/nodes');
+            const nodes = await nodesResponse.json();
+
+            // Fetch ALL stats in parallel (MUCH FASTER!)
+            const statsResponse = await fetch('/api/nodes/stats/all');
+            const allStats = await statsResponse.json();
+
+            // Create a map of node_id -> stats for quick lookup
+            const statsMap = {};
+            for (const stat of allStats) {
+                statsMap[stat.node_id] = stat;
+            }
 
             const tbody = document.querySelector('#nodesTable tbody');
             tbody.innerHTML = '';
 
-            // Load each node with stats
+            // Create rows with stats already available
             for (const node of nodes) {
                 const tr = document.createElement('tr');
                 const statusText = node.enabled ? translations[currentLang].status_enabled : translations[currentLang].status_disabled;
+                const stats = statsMap[node.id] || { online: false };
 
-                // Create row with loading state
+                // Format stats
+                let statsHtml, trafficHtml;
+                if (stats.online) {
+                    statsHtml = `<span style="color: #27ae60;">${stats.online_clients}/${stats.total_clients}</span> <span style="color: #999; font-size: 11px;">(${stats.enabled_clients})</span>`;
+                    trafficHtml = `
+                        <span style="color: #3498db; font-size: 12px;">
+                            ↑${formatBytes(stats.traffic_up)}
+                        </span><br>
+                        <span style="color: #e67e22; font-size: 12px;">
+                            ↓${formatBytes(stats.traffic_down)}
+                        </span>
+                    `;
+                } else {
+                    statsHtml = `<span style="color: #e74c3c;">offline</span>`;
+                    trafficHtml = `<span style="color: #e74c3c;">-</span>`;
+                }
+
                 tr.innerHTML = `
                     <td>${node.name}</td>
                     <td>${node.url}</td>
                     <td>${node.domain}</td>
-                    <td id="stats-${node.id}">...</td>
-                    <td id="traffic-${node.id}">...</td>
+                    <td>${statsHtml}</td>
+                    <td>${trafficHtml}</td>
                     <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span></td>
                     <td>
                         <button class="btn btn-success" onclick="testNode(${node.id})">${translations[currentLang].btn_test}</button>
@@ -1001,9 +1028,6 @@
                     </td>
                 `;
                 tbody.appendChild(tr);
-
-                // Fetch stats async
-                fetchNodeStats(node.id);
             }
         }
 
@@ -1013,39 +1037,6 @@
             const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-
-        async function fetchNodeStats(nodeId) {
-            try {
-                const response = await fetch(`/api/nodes/${nodeId}/stats`);
-                const stats = await response.json();
-
-                const statsCell = document.getElementById(`stats-${nodeId}`);
-                const trafficCell = document.getElementById(`traffic-${nodeId}`);
-
-                if (stats.online) {
-                    // Show: online/total (enabled)
-                    statsCell.innerHTML = `<span style="color: #27ae60;">${stats.online_clients}/${stats.total_clients}</span> <span style="color: #999; font-size: 11px;">(${stats.enabled_clients})</span>`;
-
-                    // Show traffic: ↑up ↓down
-                    trafficCell.innerHTML = `
-                        <span style="color: #3498db; font-size: 12px;">
-                            ↑${formatBytes(stats.traffic_up)}
-                        </span><br>
-                        <span style="color: #e67e22; font-size: 12px;">
-                            ↓${formatBytes(stats.traffic_down)}
-                        </span>
-                    `;
-                } else {
-                    statsCell.innerHTML = `<span style="color: #e74c3c;">offline</span>`;
-                    trafficCell.innerHTML = `<span style="color: #e74c3c;">-</span>`;
-                }
-            } catch (error) {
-                const statsCell = document.getElementById(`stats-${nodeId}`);
-                const trafficCell = document.getElementById(`traffic-${nodeId}`);
-                statsCell.innerHTML = `<span style="color: #e74c3c;">error</span>`;
-                trafficCell.innerHTML = `<span style="color: #e74c3c;">-</span>`;
-            }
         }
 
         // Add node
