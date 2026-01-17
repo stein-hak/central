@@ -13,6 +13,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import requests
+import httpx
+import asyncio
 
 from database import get_db, Node, Client, Key, User, PaymentStatus, engine, Base
 
@@ -421,6 +423,374 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
 
     except Exception as e:
         return False, str(e)
+
+
+# ============================================================================
+# Async Node Operations (Parallel)
+# ============================================================================
+
+async def async_create_keys_on_node(node: Node, client_email: str, db: Session) -> dict:
+    """
+    Create keys for a client on a single node (async version).
+    Returns: dict with node info, success status, keys created, and any errors
+    """
+    result = {
+        "node_id": node.id,
+        "node_name": node.name,
+        "success": False,
+        "keys": [],
+        "errors": []
+    }
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            # Login to node
+            login_response = await client.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password}
+            )
+
+            if login_response.status_code != 200:
+                result["errors"].append(f"Login failed: {login_response.status_code}")
+                return result
+
+            # Get cookies from login
+            cookies = login_response.cookies
+
+            # Get inbounds list
+            inbounds_response = await client.get(
+                f"{node.url}/panel/api/inbounds/list",
+                cookies=cookies
+            )
+
+            if inbounds_response.status_code != 200:
+                result["errors"].append("Failed to get inbounds")
+                return result
+
+            inbounds = inbounds_response.json().get("obj", [])
+
+            # Find gRPC and XHTTP inbounds
+            grpc_inbound = None
+            xhttp_inbound = None
+
+            for inbound in inbounds:
+                remark = inbound.get("remark", "").lower()
+                if "grpc" in remark:
+                    grpc_inbound = inbound
+                elif "xhttp" in remark:
+                    xhttp_inbound = inbound
+
+            # Add client to both inbounds
+            for inbound, transport in [(grpc_inbound, "gRPC"), (xhttp_inbound, "XHTTP")]:
+                if not inbound:
+                    result["errors"].append(f"{transport} inbound not found")
+                    continue
+
+                # Generate UUID for this key
+                key_uuid = uuid.uuid4()
+
+                # Determine email suffix
+                email_suffix = "-xhttp" if transport == "XHTTP" else ""
+                full_email = f"{client_email}{email_suffix}"
+
+                # Prepare client data
+                settings = json.loads(inbound["settings"])
+                clients_list = settings.get("clients", [])
+
+                new_client = {
+                    "id": str(key_uuid),
+                    "flow": "xtls-rprx-vision" if transport == "gRPC" else "",
+                    "email": full_email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "tgId": "",
+                    "subId": ""
+                }
+
+                clients_list.append(new_client)
+                settings["clients"] = clients_list
+
+                # Update inbound
+                update_data = {
+                    "up": inbound["up"],
+                    "down": inbound["down"],
+                    "total": inbound["total"],
+                    "remark": inbound["remark"],
+                    "enable": inbound["enable"],
+                    "expiryTime": inbound["expiryTime"],
+                    "listen": inbound.get("listen", ""),
+                    "port": inbound["port"],
+                    "protocol": inbound["protocol"],
+                    "settings": json.dumps(settings),
+                    "streamSettings": inbound["streamSettings"],
+                    "sniffing": inbound["sniffing"]
+                }
+
+                update_response = await client.post(
+                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                    json=update_data,
+                    cookies=cookies
+                )
+
+                if update_response.status_code == 200:
+                    result["keys"].append({
+                        "uuid": str(key_uuid),
+                        "transport": transport,
+                        "email": full_email,
+                        "inbound_id": inbound["id"]
+                    })
+                else:
+                    result["errors"].append(f"{transport} update failed: {update_response.status_code}")
+
+            result["success"] = len(result["keys"]) > 0
+
+    except Exception as e:
+        result["errors"].append(f"Exception: {str(e)}")
+
+    return result
+
+
+async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session) -> List[dict]:
+    """
+    Create keys for a client on all nodes in parallel.
+    Returns: List of results from each node
+    """
+    tasks = [async_create_keys_on_node(node, client_email, db) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node_id": nodes[i].id,
+                "node_name": nodes[i].name,
+                "success": False,
+                "keys": [],
+                "errors": [f"Task exception: {str(result)}"]
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
+
+
+async def async_delete_client_from_node(node: Node, client: Client, db: Session) -> dict:
+    """
+    Delete client from a single node (async version).
+    Returns: dict with node info, success status, and any errors
+    """
+    result = {
+        "node_id": node.id,
+        "node_name": node.name,
+        "success": False,
+        "message": ""
+    }
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as http_client:
+            # Login
+            login_response = await http_client.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password}
+            )
+
+            if login_response.status_code != 200:
+                result["message"] = f"Login failed: {login_response.status_code}"
+                return result
+
+            cookies = login_response.cookies
+
+            # Get inbounds to find gRPC and XHTTP IDs
+            inbounds_response = await http_client.get(
+                f"{node.url}/panel/api/inbounds/list",
+                cookies=cookies
+            )
+
+            if inbounds_response.status_code != 200:
+                result["message"] = "Failed to get inbounds"
+                return result
+
+            inbounds = inbounds_response.json().get("obj", [])
+
+            # Find inbound IDs
+            grpc_inbound_id = None
+            xhttp_inbound_id = None
+
+            for inbound in inbounds:
+                remark = inbound.get("remark", "").lower()
+                if "grpc" in remark:
+                    grpc_inbound_id = inbound.get("id")
+                elif "xhttp" in remark:
+                    xhttp_inbound_id = inbound.get("id")
+
+            # Delete from both inbounds
+            deleted_count = 0
+
+            if grpc_inbound_id:
+                try:
+                    await http_client.post(
+                        f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/delClientByEmail/{client.email}",
+                        cookies=cookies
+                    )
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+            if xhttp_inbound_id:
+                try:
+                    xhttp_email = f"{client.email}-xhttp"
+                    await http_client.post(
+                        f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
+                        cookies=cookies
+                    )
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+            result["success"] = True
+            result["message"] = f"Deleted from {deleted_count} inbounds"
+
+    except Exception as e:
+        result["message"] = f"Exception: {str(e)}"
+
+    return result
+
+
+async def async_delete_client_from_all_nodes(nodes: List[Node], client: Client, db: Session) -> List[dict]:
+    """
+    Delete client from all nodes in parallel.
+    Returns: List of results from each node
+    """
+    tasks = [async_delete_client_from_node(node, client, db) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node_id": nodes[i].id,
+                "node_name": nodes[i].name,
+                "success": False,
+                "message": f"Task exception: {str(result)}"
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
+
+
+async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bool, db: Session) -> dict:
+    """
+    Toggle client enable/disable on a single node (async version).
+    Returns: dict with node info, success status, and any errors
+    """
+    result = {
+        "node_id": node.id,
+        "node_name": node.name,
+        "success": False,
+        "message": ""
+    }
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as http_client:
+            # Login
+            login_response = await http_client.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password}
+            )
+
+            if login_response.status_code != 200:
+                result["message"] = f"Login failed: {login_response.status_code}"
+                return result
+
+            cookies = login_response.cookies
+
+            # Get inbounds
+            inbounds_response = await http_client.get(
+                f"{node.url}/panel/api/inbounds/list",
+                cookies=cookies
+            )
+
+            if inbounds_response.status_code != 200:
+                result["message"] = "Failed to get inbounds"
+                return result
+
+            inbounds = inbounds_response.json().get("obj", [])
+
+            # Find inbound IDs
+            grpc_inbound_id = None
+            xhttp_inbound_id = None
+
+            for inbound in inbounds:
+                remark = inbound.get("remark", "").lower()
+                if "grpc" in remark:
+                    grpc_inbound_id = inbound.get("id")
+                elif "xhttp" in remark:
+                    xhttp_inbound_id = inbound.get("id")
+
+            # Toggle both inbounds
+            toggled_count = 0
+
+            if grpc_inbound_id:
+                try:
+                    toggle_data = {"email": client_email, "enable": enabled}
+                    await http_client.post(
+                        f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/updateClient",
+                        json=toggle_data,
+                        cookies=cookies
+                    )
+                    toggled_count += 1
+                except Exception:
+                    pass
+
+            if xhttp_inbound_id:
+                try:
+                    xhttp_email = f"{client_email}-xhttp"
+                    toggle_data = {"email": xhttp_email, "enable": enabled}
+                    await http_client.post(
+                        f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/updateClient",
+                        json=toggle_data,
+                        cookies=cookies
+                    )
+                    toggled_count += 1
+                except Exception:
+                    pass
+
+            result["success"] = toggled_count > 0
+            result["message"] = f"Toggled {toggled_count} inbounds to {'enabled' if enabled else 'disabled'}"
+
+    except Exception as e:
+        result["message"] = f"Exception: {str(e)}"
+
+    return result
+
+
+async def async_toggle_client_on_all_nodes(nodes: List[Node], client_email: str, enabled: bool, db: Session) -> List[dict]:
+    """
+    Toggle client on all nodes in parallel.
+    Returns: List of results from each node
+    """
+    tasks = [async_toggle_client_on_node(node, client_email, enabled, db) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node_id": nodes[i].id,
+                "node_name": nodes[i].name,
+                "success": False,
+                "message": f"Task exception: {str(result)}"
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
 
 
 # ============================================================================
@@ -2036,133 +2406,38 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail="No enabled nodes available")
 
-    # Create keys on all nodes
+    # Create keys on all nodes IN PARALLEL using httpx
+    node_results = await async_create_keys_on_all_nodes(nodes, client_email, db)
+
+    # Process results and save keys to database
     keys_created = []
     errors = []
 
-    for node in nodes:
-        try:
-            # Login to node
-            session = requests.Session()
-            login_data = {"username": node.username, "password": node.password}
-            login_response = session.post(
-                f"{node.url}/login",
-                data=login_data,
-                verify=False,
-                timeout=10
-            )
-
-            if login_response.status_code != 200:
-                errors.append(f"{node.name}: Login failed")
-                continue
-
-            # Get inbounds list
-            inbounds_response = session.get(
-                f"{node.url}/panel/api/inbounds/list",
-                verify=False,
-                timeout=10
-            )
-
-            if inbounds_response.status_code != 200:
-                errors.append(f"{node.name}: Failed to get inbounds")
-                continue
-
-            inbounds = inbounds_response.json().get("obj", [])
-
-            # Find gRPC and XHTTP inbounds
-            grpc_inbound = None
-            xhttp_inbound = None
-
-            for inbound in inbounds:
-                remark = inbound.get("remark", "").lower()
-                if "grpc" in remark:
-                    grpc_inbound = inbound
-                elif "xhttp" in remark:
-                    xhttp_inbound = inbound
-
-            # Add client to both inbounds
-            for inbound, transport in [(grpc_inbound, "gRPC"), (xhttp_inbound, "XHTTP")]:
-                if not inbound:
-                    errors.append(f"{node.name}: {transport} inbound not found")
-                    continue
-
-                # Generate UUID for this key
-                key_uuid = uuid.uuid4()
-
-                # Determine email suffix
-                email_suffix = "-xhttp" if transport == "XHTTP" else ""
-                full_email = f"{client_email}{email_suffix}"
-
-                # Prepare client data
-                settings = json.loads(inbound["settings"])
-                clients = settings.get("clients", [])
-
-                new_client = {
-                    "id": str(key_uuid),
-                    "flow": "xtls-rprx-vision" if transport == "gRPC" else "",
-                    "email": full_email,
-                    "limitIp": 0,
-                    "totalGB": 0,
-                    "expiryTime": 0,
-                    "enable": True,
-                    "tgId": "",
-                    "subId": ""
-                }
-
-                clients.append(new_client)
-                settings["clients"] = clients
-
-                # Update inbound
-                update_data = {
-                    "up": inbound["up"],
-                    "down": inbound["down"],
-                    "total": inbound["total"],
-                    "remark": inbound["remark"],
-                    "enable": inbound["enable"],
-                    "expiryTime": inbound["expiryTime"],
-                    "listen": inbound.get("listen", ""),
-                    "port": inbound["port"],
-                    "protocol": inbound["protocol"],
-                    "settings": json.dumps(settings),
-                    "streamSettings": inbound["streamSettings"],
-                    "sniffing": inbound["sniffing"]
-                }
-
-                update_response = session.post(
-                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
-                    json=update_data,
-                    verify=False,
-                    timeout=10
+    for result in node_results:
+        if result["success"]:
+            for key_info in result["keys"]:
+                # Save key to database
+                key = Key(
+                    client_id=client.id,
+                    node_id=result["node_id"],
+                    inbound_id=key_info["inbound_id"],
+                    uuid=key_info["uuid"],
+                    vless_url=create_vless_url(
+                        db.query(Node).get(result["node_id"]),
+                        client_email,
+                        key_info["uuid"],
+                        key_info["inbound_id"],
+                        key_info["transport"].lower()
+                    ),
+                    manual=False,
+                    created_at=datetime.utcnow()
                 )
+                db.add(key)
+                keys_created.append(f"{result['node_name']}-{key_info['transport']}")
 
-                if update_response.status_code == 200:
-                    # Create VLESS URL
-                    stream_settings = json.loads(inbound["streamSettings"])
-
-                    if transport == "gRPC":
-                        service_name = stream_settings.get("grpcSettings", {}).get("serviceName", "")
-                        vless_url = f"vless://{key_uuid}@{node.domain}:443?type=grpc&serviceName={service_name}&security=tls&sni={node.domain}&fp=chrome#{node.name}-gRPC"
-                    else:  # XHTTP
-                        path = stream_settings.get("xhttpSettings", {}).get("path", "/")
-                        vless_url = f"vless://{key_uuid}@{node.domain}:443?type=xhttp&path={path}&security=reality&sni=www.samsung.com&fp=chrome&pbk=SbVKoAarReR_uuid4jMGlV40FUqPO7l5C0QaveI8UV0&sid=6ba85179e30d4fc2#{node.name}-XHTTP"
-
-                    # Save key to database
-                    key = Key(
-                        client_id=client.id,
-                        node_id=node.id,
-                        inbound_id=inbound["id"],
-                        uuid=key_uuid,
-                        vless_url=vless_url,
-                        manual=False,
-                        created_at=datetime.utcnow()
-                    )
-                    db.add(key)
-                    keys_created.append(f"{node.name}-{transport}")
-                else:
-                    errors.append(f"{node.name}-{transport}: Update failed")
-
-        except Exception as e:
-            errors.append(f"{node.name}: {str(e)}")
+        # Collect errors
+        if result["errors"]:
+            errors.extend([f"{result['node_name']}: {err}" for err in result["errors"]])
 
     if not keys_created:
         db.rollback()
@@ -2404,92 +2679,17 @@ async def delete_user(request: Request, telegram_id: int, db: Session = Depends(
     client = user.client
 
     if client:
-        # Get all keys
+        # Get unique nodes that have keys for this client
         keys = db.query(Key).filter(Key.client_id == client.id).all()
+        unique_node_ids = list(set([key.node_id for key in keys]))
+        nodes = [db.query(Node).get(node_id) for node_id in unique_node_ids if db.query(Node).get(node_id)]
 
-        # Delete from nodes
-        errors = []
-        for key in keys:
-            node = db.query(Node).filter(Node.id == key.node_id).first()
-            if not node:
-                continue
-
-            try:
-                # Login to node
-                session = requests.Session()
-                login_data = {"username": node.username, "password": node.password}
-                login_response = session.post(
-                    f"{node.url}/login",
-                    data=login_data,
-                    verify=False,
-                    timeout=10
-                )
-
-                if login_response.status_code != 200:
-                    errors.append(f"{node.name}: Login failed")
-                    continue
-
-                # Get inbound
-                inbounds_response = session.get(
-                    f"{node.url}/panel/api/inbounds/list",
-                    verify=False,
-                    timeout=10
-                )
-
-                if inbounds_response.status_code != 200:
-                    errors.append(f"{node.name}: Failed to get inbounds")
-                    continue
-
-                inbounds = inbounds_response.json().get("obj", [])
-                inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
-
-                if not inbound:
-                    errors.append(f"{node.name}: Inbound {key.inbound_id} not found")
-                    continue
-
-                # Remove client from settings
-                settings = json.loads(inbound["settings"])
-                clients = settings.get("clients", [])
-
-                # Determine email to search
-                inbound_remark = inbound.get("remark", "").lower()
-                if "xhttp" in inbound_remark:
-                    search_email = f"{client.email}-xhttp"
-                else:
-                    search_email = client.email
-
-                # Filter out the client
-                clients = [c for c in clients if c.get("email") != search_email]
-                settings["clients"] = clients
-
-                # Update inbound
-                update_data = {
-                    "up": inbound["up"],
-                    "down": inbound["down"],
-                    "total": inbound["total"],
-                    "remark": inbound["remark"],
-                    "enable": inbound["enable"],
-                    "expiryTime": inbound["expiryTime"],
-                    "listen": inbound.get("listen", ""),
-                    "port": inbound["port"],
-                    "protocol": inbound["protocol"],
-                    "settings": json.dumps(settings),
-                    "streamSettings": inbound["streamSettings"],
-                    "sniffing": inbound["sniffing"]
-                }
-
-                update_response = session.post(
-                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
-                    json=update_data,
-                    verify=False,
-                    timeout=10
-                )
-
-                if update_response.status_code != 200:
-                    errors.append(f"{node.name}: Update failed")
-
-            except Exception as e:
-                errors.append(f"{node.name}: {str(e)}")
+        # Delete client from all nodes IN PARALLEL using httpx
+        if nodes:
+            results = await async_delete_client_from_all_nodes(nodes, client, db)
+            errors = [r["message"] for r in results if not r["success"]]
+        else:
+            errors = []
 
     # Delete from database (cascade will handle client and keys)
     db.delete(user)
@@ -2520,95 +2720,17 @@ async def toggle_user_enabled(request: Request, telegram_id: int, db: Session = 
     client = user.client
     client.enabled = enable
 
-    # Get all keys for this client
+    # Get unique nodes that have keys for this client
     keys = db.query(Key).filter(Key.client_id == client.id).all()
+    unique_node_ids = list(set([key.node_id for key in keys]))
+    nodes = [db.query(Node).get(node_id) for node_id in unique_node_ids if db.query(Node).get(node_id)]
 
-    errors = []
-    for key in keys:
-        node = db.query(Node).filter(Node.id == key.node_id).first()
-        if not node:
-            continue
-
-        try:
-            # Login to node
-            session = requests.Session()
-            login_data = {"username": node.username, "password": node.password}
-            login_response = session.post(
-                f"{node.url}/login",
-                data=login_data,
-                verify=False,
-                timeout=10
-            )
-
-            if login_response.status_code != 200:
-                errors.append(f"{node.name}: Login failed")
-                continue
-
-            # Get inbound
-            inbounds_response = session.get(
-                f"{node.url}/panel/api/inbounds/list",
-                verify=False,
-                timeout=10
-            )
-
-            if inbounds_response.status_code != 200:
-                errors.append(f"{node.name}: Failed to get inbounds")
-                continue
-
-            inbounds = inbounds_response.json().get("obj", [])
-            inbound = next((ib for ib in inbounds if ib.get("id") == key.inbound_id), None)
-
-            if not inbound:
-                errors.append(f"{node.name}: Inbound not found")
-                continue
-
-            # Update client enable status
-            settings = json.loads(inbound["settings"])
-            clients = settings.get("clients", [])
-
-            # Determine email to search
-            inbound_remark = inbound.get("remark", "").lower()
-            if "xhttp" in inbound_remark:
-                search_email = f"{client.email}-xhttp"
-            else:
-                search_email = client.email
-
-            # Find and toggle the client
-            for c in clients:
-                if c.get("email") == search_email:
-                    c["enable"] = enable
-                    break
-
-            settings["clients"] = clients
-
-            # Update inbound
-            update_data = {
-                "up": inbound["up"],
-                "down": inbound["down"],
-                "total": inbound["total"],
-                "remark": inbound["remark"],
-                "enable": inbound["enable"],
-                "expiryTime": inbound["expiryTime"],
-                "listen": inbound.get("listen", ""),
-                "port": inbound["port"],
-                "protocol": inbound["protocol"],
-                "settings": json.dumps(settings),
-                "streamSettings": inbound["streamSettings"],
-                "sniffing": inbound["sniffing"]
-            }
-
-            update_response = session.post(
-                f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
-                json=update_data,
-                verify=False,
-                timeout=10
-            )
-
-            if update_response.status_code != 200:
-                errors.append(f"{node.name}: Update failed")
-
-        except Exception as e:
-            errors.append(f"{node.name}: {str(e)}")
+    # Toggle client on all nodes IN PARALLEL using httpx
+    if nodes:
+        results = await async_toggle_client_on_all_nodes(nodes, client.email, enable, db)
+        errors = [r["message"] for r in results if not r["success"]]
+    else:
+        errors = []
 
     db.commit()
 
