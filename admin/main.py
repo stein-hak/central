@@ -793,6 +793,212 @@ async def async_toggle_client_on_all_nodes(nodes: List[Node], client_email: str,
     return processed_results
 
 
+async def async_get_node_stats(node: Node) -> dict:
+    """
+    Get stats from a single node (async version).
+    Returns: dict with node stats
+    """
+    result = {
+        "node_id": node.id,
+        "node_name": node.name,
+        "online": False,
+        "total_clients": 0,
+        "enabled_clients": 0,
+        "online_clients": 0,
+        "traffic_up": 0,
+        "traffic_down": 0,
+        "traffic_total": 0
+    }
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+            # Login
+            login_response = await client.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password}
+            )
+
+            if login_response.status_code != 200:
+                return result
+
+            cookies = login_response.cookies
+
+            # Get inbounds
+            inbounds_response = await client.get(
+                f"{node.url}/panel/api/inbounds/list",
+                cookies=cookies
+            )
+
+            if inbounds_response.status_code != 200:
+                return result
+
+            inbounds_data = inbounds_response.json()
+            inbounds = inbounds_data.get("obj", [])
+
+            # Sum traffic across ALL inbounds
+            total_up = 0
+            total_down = 0
+
+            # Find gRPC inbound for client counts
+            grpc_inbound = None
+            for inbound in inbounds:
+                # Sum traffic from all inbounds
+                if "up" in inbound:
+                    total_up += inbound.get("up", 0)
+                if "down" in inbound:
+                    total_down += inbound.get("down", 0)
+
+                # Find gRPC inbound for client stats
+                remark = inbound.get("remark", "").lower()
+                if "grpc" in remark:
+                    grpc_inbound = inbound
+
+            result["online"] = True
+            result["traffic_up"] = total_up
+            result["traffic_down"] = total_down
+            result["traffic_total"] = total_up + total_down
+
+            if not grpc_inbound:
+                return result
+
+            # Count clients
+            settings = json.loads(grpc_inbound.get("settings", "{}"))
+            clients = settings.get("clients", [])
+            total_clients = len(clients)
+
+            # Get client stats to count truly online clients
+            client_stats = grpc_inbound.get("clientStats", [])
+
+            # Count clients that are ACTUALLY online (lastOnline within 2 minutes)
+            current_time_ms = time.time() * 1000
+            online_threshold_ms = 2 * 60 * 1000  # 2 minutes in milliseconds
+
+            online_client_emails = set()
+            for stat in client_stats:
+                last_online = stat.get("lastOnline", 0)
+                email = stat.get("email")
+                if email and last_online and (current_time_ms - last_online) < online_threshold_ms:
+                    online_client_emails.add(email)
+
+            # Count enabled vs online
+            enabled_clients = sum(1 for c in clients if c.get("enable", True))
+            online_clients = len(online_client_emails)
+
+            result["total_clients"] = total_clients
+            result["enabled_clients"] = enabled_clients
+            result["online_clients"] = online_clients
+
+    except Exception:
+        pass
+
+    return result
+
+
+async def async_get_all_nodes_stats(nodes: List[Node]) -> List[dict]:
+    """
+    Get stats from all nodes in parallel.
+    Returns: List of stats from each node
+    """
+    tasks = [async_get_node_stats(node) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to offline results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node_id": nodes[i].id,
+                "node_name": nodes[i].name,
+                "online": False,
+                "total_clients": 0,
+                "enabled_clients": 0,
+                "online_clients": 0,
+                "traffic_up": 0,
+                "traffic_down": 0,
+                "traffic_total": 0,
+                "error": str(result)
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
+
+
+async def async_backup_node(node: Node, backup_path: str) -> dict:
+    """
+    Backup a single node's database (async version).
+    Returns: dict with node backup info
+    """
+    result = {
+        "node": node.name,
+        "success": False,
+        "error": None,
+        "file_size": 0
+    }
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            # Login
+            login_response = await client.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password}
+            )
+
+            if login_response.status_code != 200:
+                result["error"] = "Login failed"
+                return result
+
+            cookies = login_response.cookies
+
+            # Get database backup via API
+            backup_response = await client.get(
+                f"{node.url}/panel/api/server/getDb",
+                cookies=cookies
+            )
+
+            if backup_response.status_code == 200:
+                node_backup_file = f"{backup_path}/{node.name}.db"
+
+                # Write backup file
+                with open(node_backup_file, 'wb') as f:
+                    f.write(backup_response.content)
+
+                file_size = os.path.getsize(node_backup_file)
+                result["success"] = True
+                result["file_size"] = file_size
+            else:
+                result["error"] = f"Backup API returned {backup_response.status_code}"
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+async def async_backup_all_nodes(nodes: List[Node], backup_path: str) -> List[dict]:
+    """
+    Backup all nodes' databases in parallel.
+    Returns: List of backup results from each node
+    """
+    tasks = [async_backup_node(node, backup_path) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node": nodes[i].name,
+                "success": False,
+                "error": str(result),
+                "file_size": 0
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
+
+
 # ============================================================================
 # Web UI Routes
 # ============================================================================
@@ -847,6 +1053,22 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
     check_auth(request)
     nodes = db.query(Node).all()
     return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled} for n in nodes]
+
+
+@app.get("/api/nodes/stats/all")
+async def get_all_nodes_stats(request: Request, db: Session = Depends(get_db)):
+    """Get statistics from ALL nodes in parallel - MUCH faster than calling /api/nodes/{id}/stats for each node"""
+    check_auth(request)
+
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+
+    if not nodes:
+        return []
+
+    # Fetch stats from all nodes in parallel
+    stats = await async_get_all_nodes_stats(nodes)
+
+    return stats
 
 
 @app.get("/api/nodes/{node_id}/stats")
@@ -1289,17 +1511,44 @@ async def create_client(
     # Generate UUID for this client
     client_uuid = uuid.uuid4()
 
-    # Sync to all enabled nodes (auto-generated keys)
+    # Sync to all enabled nodes IN PARALLEL (auto-generated keys)
     nodes = db.query(Node).filter(Node.enabled == True).all()
-    results = []
 
-    for node in nodes:
-        success, message = sync_client_to_node(node, client, client_uuid, db)
-        results.append({
-            "node": node.name,
-            "success": success,
-            "message": message
-        })
+    if nodes:
+        # Use async parallel key creation
+        node_results = await async_create_keys_on_all_nodes(nodes, email, db)
+
+        # Save keys to database
+        for result in node_results:
+            if result["success"]:
+                for key_info in result["keys"]:
+                    key = Key(
+                        client_id=client.id,
+                        node_id=result["node_id"],
+                        inbound_id=key_info["inbound_id"],
+                        uuid=key_info["uuid"],
+                        vless_url=create_vless_url(
+                            db.query(Node).get(result["node_id"]),
+                            email,
+                            key_info["uuid"],
+                            key_info["inbound_id"],
+                            key_info["transport"].lower()
+                        ),
+                        manual=False,
+                        created_at=datetime.utcnow()
+                    )
+                    db.add(key)
+
+        db.commit()
+
+        # Format results for response
+        results = [{
+            "node": r["node_name"],
+            "success": r["success"],
+            "message": f"Created {len(r['keys'])} keys" if r["success"] else ", ".join(r["errors"])
+        } for r in node_results]
+    else:
+        results = []
 
     # Process manual keys if provided
     manual_results = []
@@ -1392,14 +1641,33 @@ async def batch_create_clients(
         db.commit()
         db.refresh(client)
 
-        # Generate UUID for this client
-        client_uuid = uuid.uuid4()
+        # Sync to all enabled nodes IN PARALLEL
+        if nodes:
+            node_results = await async_create_keys_on_all_nodes(nodes, email, db)
 
-        # Sync to all enabled nodes
-        for node in nodes:
-            success, message = sync_client_to_node(node, client, client_uuid, db)
-            if success:
-                total_synced += 1
+            # Save keys to database
+            for result in node_results:
+                if result["success"]:
+                    for key_info in result["keys"]:
+                        key = Key(
+                            client_id=client.id,
+                            node_id=result["node_id"],
+                            inbound_id=key_info["inbound_id"],
+                            uuid=key_info["uuid"],
+                            vless_url=create_vless_url(
+                                db.query(Node).get(result["node_id"]),
+                                email,
+                                key_info["uuid"],
+                                key_info["inbound_id"],
+                                key_info["transport"].lower()
+                            ),
+                            manual=False,
+                            created_at=datetime.utcnow()
+                        )
+                        db.add(key)
+                        total_synced += 1
+
+            db.commit()
 
         # Add subscription URL
         subscription_url = f"{subscription_base_url}/{email}"
@@ -1430,16 +1698,20 @@ async def enable_client(request: Request, client_id: int, db: Session = Depends(
     client.enabled = True
     db.commit()
 
-    # Resync to all nodes
-    client_uuid = uuid.uuid4()
+    # Toggle on all nodes IN PARALLEL
     nodes = db.query(Node).filter(Node.enabled == True).all()
-    results = []
 
-    for node in nodes:
-        success, message = sync_client_to_node(node, client, client_uuid, db)
-        results.append({"node": node.name, "success": success, "message": message})
+    if nodes:
+        results = await async_toggle_client_on_all_nodes(nodes, client.email, True, db)
+        formatted_results = [{
+            "node": r["node_name"],
+            "success": r["success"],
+            "message": r["message"]
+        } for r in results]
+    else:
+        formatted_results = []
 
-    return {"message": "Client enabled", "sync_results": results}
+    return {"message": "Client enabled", "sync_results": formatted_results}
 
 
 @app.put("/api/clients/{client_id}/disable")
@@ -1454,16 +1726,20 @@ async def disable_client(request: Request, client_id: int, db: Session = Depends
     client.enabled = False
     db.commit()
 
-    # Resync to all nodes to disable
-    client_uuid = uuid.uuid4()
+    # Toggle on all nodes IN PARALLEL
     nodes = db.query(Node).filter(Node.enabled == True).all()
-    results = []
 
-    for node in nodes:
-        success, message = sync_client_to_node(node, client, client_uuid, db)
-        results.append({"node": node.name, "success": success, "message": message})
+    if nodes:
+        results = await async_toggle_client_on_all_nodes(nodes, client.email, False, db)
+        formatted_results = [{
+            "node": r["node_name"],
+            "success": r["success"],
+            "message": r["message"]
+        } for r in results]
+    else:
+        formatted_results = []
 
-    return {"message": "Client disabled", "sync_results": results}
+    return {"message": "Client disabled", "sync_results": formatted_results}
 
 
 @app.get("/api/clients/{client_id}/limit")
@@ -1780,19 +2056,24 @@ async def delete_client(request: Request, client_id: int, db: Session = Depends(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Delete from all nodes
+    # Delete from all nodes IN PARALLEL
     nodes = db.query(Node).filter(Node.enabled == True).all()
-    results = []
 
-    for node in nodes:
-        success, message = delete_client_from_node(node, client, db)
-        results.append({"node": node.name, "success": success, "message": message})
+    if nodes:
+        results = await async_delete_client_from_all_nodes(nodes, client, db)
+        formatted_results = [{
+            "node": r["node_name"],
+            "success": r["success"],
+            "message": r["message"]
+        } for r in results]
+    else:
+        formatted_results = []
 
     # Delete from database
     db.delete(client)
     db.commit()
 
-    return {"message": "Client deleted", "sync_results": results}
+    return {"message": "Client deleted", "sync_results": formatted_results}
 
 
 @app.post("/api/clients/batch-delete")
@@ -1813,7 +2094,7 @@ async def batch_delete_clients(
     deleted_count = 0
     keys_removed = 0
 
-    # Get all enabled nodes
+    # Get all enabled nodes ONCE
     nodes = db.query(Node).filter(Node.enabled == True).all()
 
     for client_id in client_ids:
@@ -1825,10 +2106,10 @@ async def batch_delete_clients(
         keys_count = db.query(Key).filter(Key.client_id == client_id).count()
         keys_removed += keys_count
 
-        # Delete from all nodes
-        for node in nodes:
+        # Delete from all nodes IN PARALLEL
+        if nodes:
             try:
-                delete_client_from_node(node, client, db)
+                await async_delete_client_from_all_nodes(nodes, client, db)
             except Exception:
                 # Continue even if node deletion fails
                 pass
@@ -2018,60 +2299,27 @@ async def create_backup(request: Request, db: Session = Depends(get_db)):
             "nodes": []
         }
 
-        # Backup all nodes via API
+        # Backup all nodes IN PARALLEL via API
         nodes = db.query(Node).all()
-        for node in nodes:
-            try:
-                session = requests.Session()
-                session.verify = False
 
-                # Login to node
-                login_response = session.post(
-                    f"{node.url}/login",
-                    data={"username": node.username, "password": node.password},
-                    timeout=10
-                )
+        if nodes:
+            backup_results = await async_backup_all_nodes(nodes, backup_path)
 
-                if login_response.status_code != 200:
+            # Format results for response
+            for r in backup_results:
+                if r["success"]:
                     results["nodes"].append({
-                        "node": node.name,
-                        "success": False,
-                        "error": "Login failed"
-                    })
-                    continue
-
-                # Get database backup via API
-                # Note: endpoint might be /panel/api/server/getDb or /server/getDb
-                backup_response = session.get(
-                    f"{node.url}/panel/api/server/getDb",
-                    timeout=30
-                )
-
-                if backup_response.status_code == 200:
-                    node_backup_file = f"{backup_path}/{node.name}.db"
-                    with open(node_backup_file, 'wb') as f:
-                        f.write(backup_response.content)
-
-                    file_size = os.path.getsize(node_backup_file)
-                    results["nodes"].append({
-                        "node": node.name,
+                        "node": r["node"],
                         "success": True,
-                        "size": file_size,
-                        "file": f"{node.name}.db"
+                        "size": r["file_size"],
+                        "file": f"{r['node']}.db"
                     })
                 else:
                     results["nodes"].append({
-                        "node": node.name,
+                        "node": r["node"],
                         "success": False,
-                        "error": f"API returned {backup_response.status_code}"
+                        "error": r["error"]
                     })
-
-            except Exception as e:
-                results["nodes"].append({
-                    "node": node.name,
-                    "success": False,
-                    "error": str(e)
-                })
 
         # Create metadata file
         metadata = {
