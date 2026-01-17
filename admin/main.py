@@ -643,29 +643,33 @@ async def async_delete_client_from_node(node: Node, client: Client, db: Session)
                 elif "xhttp" in remark:
                     xhttp_inbound_id = inbound.get("id")
 
-            # Delete from both inbounds
-            deleted_count = 0
+            # Delete from both inbounds IN PARALLEL
+            delete_tasks = []
 
             if grpc_inbound_id:
-                try:
-                    await http_client.post(
+                delete_tasks.append(
+                    http_client.post(
                         f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/delClientByEmail/{client.email}",
                         cookies=cookies
                     )
-                    deleted_count += 1
-                except Exception:
-                    pass
+                )
 
             if xhttp_inbound_id:
-                try:
-                    xhttp_email = f"{client.email}-xhttp"
-                    await http_client.post(
+                xhttp_email = f"{client.email}-xhttp"
+                delete_tasks.append(
+                    http_client.post(
                         f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
                         cookies=cookies
                     )
-                    deleted_count += 1
-                except Exception:
-                    pass
+                )
+
+            # Execute all deletes in parallel
+            deleted_count = 0
+            if delete_tasks:
+                delete_responses = await asyncio.gather(*delete_tasks, return_exceptions=True)
+                for response in delete_responses:
+                    if not isinstance(response, Exception):
+                        deleted_count += 1
 
             result["success"] = True
             result["message"] = f"Deleted from {deleted_count} inbounds"
@@ -749,33 +753,37 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
                 elif "xhttp" in remark:
                     xhttp_inbound_id = inbound.get("id")
 
-            # Toggle both inbounds
-            toggled_count = 0
+            # Toggle both inbounds IN PARALLEL
+            toggle_tasks = []
 
             if grpc_inbound_id:
-                try:
-                    toggle_data = {"email": client_email, "enable": enabled}
-                    await http_client.post(
+                toggle_data = {"email": client_email, "enable": enabled}
+                toggle_tasks.append(
+                    http_client.post(
                         f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/updateClient",
                         json=toggle_data,
                         cookies=cookies
                     )
-                    toggled_count += 1
-                except Exception:
-                    pass
+                )
 
             if xhttp_inbound_id:
-                try:
-                    xhttp_email = f"{client_email}-xhttp"
-                    toggle_data = {"email": xhttp_email, "enable": enabled}
-                    await http_client.post(
+                xhttp_email = f"{client_email}-xhttp"
+                toggle_data = {"email": xhttp_email, "enable": enabled}
+                toggle_tasks.append(
+                    http_client.post(
                         f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/updateClient",
                         json=toggle_data,
                         cookies=cookies
                     )
-                    toggled_count += 1
-                except Exception:
-                    pass
+                )
+
+            # Execute all toggles in parallel
+            toggled_count = 0
+            if toggle_tasks:
+                toggle_responses = await asyncio.gather(*toggle_tasks, return_exceptions=True)
+                for response in toggle_responses:
+                    if not isinstance(response, Exception):
+                        toggled_count += 1
 
             result["success"] = toggled_count > 0
             result["message"] = f"Toggled {toggled_count} inbounds to {'enabled' if enabled else 'disabled'}"
