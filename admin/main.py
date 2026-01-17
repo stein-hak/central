@@ -1490,16 +1490,29 @@ async def delete_node(request: Request, node_id: int, db: Session = Depends(get_
             if client:
                 clients_on_node[key.client_id] = client
 
-    # Delete all clients from the actual 3x-ui node
+    # Check if node is online (quick 2-second timeout)
+    node_online = False
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=2.0) as client:
+            response = await client.get(f"{node.url}/login")
+            node_online = response.status_code in [200, 302, 405]
+    except Exception:
+        node_online = False
+
+    # Delete all clients from the actual 3x-ui node (only if online)
     clients_deleted_on_node = 0
-    for client in clients_on_node.values():
-        try:
-            success, msg = delete_client_from_node(node, client, db)
-            if success:
-                clients_deleted_on_node += 1
-        except Exception:
-            # Continue even if deletion fails (node might be offline)
-            pass
+    if node_online:
+        print(f"Node {node.name} is online, deleting {len(clients_on_node)} clients from node...")
+        for client in clients_on_node.values():
+            try:
+                success, msg = delete_client_from_node(node, client, db)
+                if success:
+                    clients_deleted_on_node += 1
+            except Exception:
+                # Continue even if deletion fails
+                pass
+    else:
+        print(f"Node {node.name} is offline, skipping API calls and just cleaning database...")
 
     # Delete all keys associated with this node from database
     keys_deleted = db.query(Key).filter(Key.node_id == node_id).delete()
