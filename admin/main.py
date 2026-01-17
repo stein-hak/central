@@ -480,7 +480,9 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
                 elif "xhttp" in remark:
                     xhttp_inbound = inbound
 
-            # Add client to both inbounds
+            # Prepare both inbound updates in parallel
+            update_tasks = []
+
             for inbound, transport in [(grpc_inbound, "gRPC"), (xhttp_inbound, "XHTTP")]:
                 if not inbound:
                     result["errors"].append(f"{transport} inbound not found")
@@ -512,7 +514,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
                 clients_list.append(new_client)
                 settings["clients"] = clients_list
 
-                # Update inbound
+                # Update inbound data
                 update_data = {
                     "up": inbound["up"],
                     "down": inbound["down"],
@@ -528,21 +530,36 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
                     "sniffing": inbound["sniffing"]
                 }
 
-                update_response = await client.post(
-                    f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
-                    json=update_data,
-                    cookies=cookies
-                )
+                # Create update task (will execute in parallel)
+                update_tasks.append({
+                    "task": client.post(
+                        f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
+                        json=update_data,
+                        cookies=cookies
+                    ),
+                    "uuid": str(key_uuid),
+                    "transport": transport,
+                    "email": full_email,
+                    "inbound_id": inbound["id"]
+                })
 
-                if update_response.status_code == 200:
-                    result["keys"].append({
-                        "uuid": str(key_uuid),
-                        "transport": transport,
-                        "email": full_email,
-                        "inbound_id": inbound["id"]
-                    })
-                else:
-                    result["errors"].append(f"{transport} update failed: {update_response.status_code}")
+            # Execute all inbound updates in parallel
+            if update_tasks:
+                update_responses = await asyncio.gather(*[t["task"] for t in update_tasks], return_exceptions=True)
+
+                for i, response in enumerate(update_responses):
+                    task_info = update_tasks[i]
+                    if isinstance(response, Exception):
+                        result["errors"].append(f"{task_info['transport']} update exception: {str(response)}")
+                    elif response.status_code == 200:
+                        result["keys"].append({
+                            "uuid": task_info["uuid"],
+                            "transport": task_info["transport"],
+                            "email": task_info["email"],
+                            "inbound_id": task_info["inbound_id"]
+                        })
+                    else:
+                        result["errors"].append(f"{task_info['transport']} update failed: {response.status_code}")
 
             result["success"] = len(result["keys"]) > 0
 
