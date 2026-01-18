@@ -443,9 +443,12 @@
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                     <h2 data-i18n="users_list">Users</h2>
-                    <button class="btn" style="background: #f39c12; color: white;" onclick="checkRenewals()" data-i18n="btn_check_renewals">
-                        Check Renewals
-                    </button>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="userSearch" placeholder="Search by telegram ID, name, tag, email..." style="width: 300px;">
+                        <button class="btn" style="background: #f39c12; color: white;" onclick="checkRenewals()" data-i18n="btn_check_renewals">
+                            Check Renewals
+                        </button>
+                    </div>
                 </div>
                 <table id="usersTable">
                     <thead>
@@ -1136,10 +1139,16 @@
         // Load clients
         let currentClientsPage = 1;
         const clientsPerPage = 50;
+        let currentClientsSearch = '';
 
-        async function loadClients(page = 1) {
+        async function loadClients(page = 1, search = '') {
             currentClientsPage = page;
-            const response = await fetch(`/api/clients?page=${page}&limit=${clientsPerPage}`);
+            currentClientsSearch = search;
+            let url = `/api/clients?page=${page}&limit=${clientsPerPage}`;
+            if (search) {
+                url += `&search=${encodeURIComponent(search)}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             const clients = data.clients || [];
             const total = data.total || 0;
@@ -1195,23 +1204,18 @@
         function changeClientsPage(direction) {
             const newPage = currentClientsPage + direction;
             if (newPage >= 1) {
-                loadClients(newPage);
+                loadClients(newPage, currentClientsSearch);
             }
         }
 
-        // Client search filter
+        // Client search - server-side search with debounce
+        let clientSearchTimeout;
         document.getElementById('clientSearch').addEventListener('input', function(e) {
-            const searchTerm = e.target.value.toLowerCase();
-            const rows = document.querySelectorAll('#clientsTable tbody tr');
-
-            rows.forEach(row => {
-                const email = row.getAttribute('data-email');
-                if (email.includes(searchTerm)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
+            clearTimeout(clientSearchTimeout);
+            clientSearchTimeout = setTimeout(() => {
+                const searchTerm = e.target.value.trim();
+                loadClients(1, searchTerm); // Reset to page 1 when searching
+            }, 300); // 300ms debounce
         });
 
         // Add client
@@ -1655,10 +1659,16 @@
 
         let currentUsersPage = 1;
         const usersPerPage = 50;
+        let currentUsersSearch = '';
 
-        async function loadUsers(page = 1) {
+        async function loadUsers(page = 1, search = '') {
             currentUsersPage = page;
-            const response = await fetch(`/api/users?page=${page}&limit=${usersPerPage}`);
+            currentUsersSearch = search;
+            let url = `/api/users?page=${page}&limit=${usersPerPage}`;
+            if (search) {
+                url += `&search=${encodeURIComponent(search)}`;
+            }
+            const response = await fetch(url);
             const data = await response.json();
             const users = data.users || [];
             const total = data.total || 0;
@@ -1740,9 +1750,21 @@
         function changeUsersPage(direction) {
             const newPage = currentUsersPage + direction;
             if (newPage >= 1) {
-                loadUsers(newPage);
+                loadUsers(newPage, currentUsersSearch);
             }
         }
+
+        // User search event listener
+        document.addEventListener('DOMContentLoaded', function() {
+            let userSearchTimeout;
+            document.getElementById('userSearch').addEventListener('input', function(e) {
+                clearTimeout(userSearchTimeout);
+                userSearchTimeout = setTimeout(() => {
+                    const searchTerm = e.target.value.trim();
+                    loadUsers(1, searchTerm); // Reset to page 1 when searching
+                }, 300); // 300ms debounce
+            });
+        });
 
         async function addUser(event) {
             event.preventDefault();

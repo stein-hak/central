@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import cast, String, or_
 import requests
 import httpx
 import asyncio
@@ -1536,18 +1537,26 @@ async def delete_node(request: Request, node_id: int, db: Session = Depends(get_
 # ============================================================================
 
 @app.get("/api/clients")
-async def get_clients(request: Request, page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
-    """Get clients with pagination"""
+async def get_clients(request: Request, page: int = 1, limit: int = 50, search: str = None, db: Session = Depends(get_db)):
+    """Get clients with pagination and search"""
     check_auth(request)
 
+    # Build base query
+    query = db.query(Client)
+
+    # Apply search filter if provided
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(Client.email.like(search_term))
+
     # Get total count
-    total = db.query(Client).count()
+    total = query.count()
 
     # Calculate offset
     offset = (page - 1) * limit
 
     # Get paginated clients, ordered by created_at DESC (newest first)
-    clients = db.query(Client).order_by(Client.created_at.desc()).offset(offset).limit(limit).all()
+    clients = query.order_by(Client.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
     for c in clients:
@@ -2555,18 +2564,33 @@ async def restore_backup(request: Request, backup_id: str, db: Session = Depends
 # ============================================================================
 
 @app.get("/api/users")
-async def get_users(request: Request, page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
-    """Get users with pagination"""
+async def get_users(request: Request, page: int = 1, limit: int = 50, search: str = None, db: Session = Depends(get_db)):
+    """Get users with pagination and search"""
     check_auth(request)
 
+    # Build base query
+    query = db.query(User)
+
+    # Apply search filter if provided
+    if search:
+        search_term = f"%{search}%"
+        query = query.join(Client, User.client_id == Client.id, isouter=True).filter(
+            or_(
+                cast(User.telegram_id, String).like(search_term),
+                User.name.like(search_term),
+                User.tag.like(search_term),
+                Client.email.like(search_term)
+            )
+        )
+
     # Get total count
-    total = db.query(User).count()
+    total = query.count()
 
     # Calculate offset
     offset = (page - 1) * limit
 
     # Get paginated users, ordered by created_at DESC (newest first)
-    users = db.query(User).order_by(User.created_at.desc()).offset(offset).limit(limit).all()
+    users = query.order_by(User.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
     for user in users:
