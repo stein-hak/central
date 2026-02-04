@@ -2,7 +2,8 @@
 import base64
 import os
 import random
-from fastapi import FastAPI, Depends, HTTPException, Response
+import re
+from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,109 @@ app = FastAPI(title="Subscription Service")
 # Get profile title from environment
 PROFILE_TITLE = os.getenv("PROFILE_TITLE", "VPN Service")
 
+# Feature toggle: Enable device-aware fingerprint randomization
+# Set to "true" to enable, "false" to disable (default: false)
+ENABLE_FP_RANDOMIZATION = os.getenv("ENABLE_FP_RANDOMIZATION", "false").lower() == "true"
+
+
+def get_fingerprints_for_device(user_agent: str) -> tuple[list, list]:
+    """
+    Return (fingerprints, weights) appropriate for device type
+
+    Args:
+        user_agent: HTTP User-Agent header
+
+    Returns:
+        Tuple of (fingerprint_list, weights_list)
+    """
+    ua = user_agent.lower()
+
+    if 'iphone' in ua or 'ipad' in ua:
+        # iOS devices: prefer ios/safari, include chrome (iOS can run it), random as fallback
+        return (
+            ['ios', 'safari', 'chrome', 'random'],
+            [40, 30, 20, 10]
+        )
+
+    elif 'android' in ua:
+        # Android devices: prefer android/chrome, include firefox, random as fallback
+        return (
+            ['android', 'chrome', 'firefox', 'random'],
+            [35, 35, 20, 10]
+        )
+
+    else:
+        # Desktop or unknown: all desktop browsers + random
+        return (
+            ['chrome', 'firefox', 'edge', 'safari', 'random'],
+            [30, 25, 20, 15, 10]
+        )
+
+
+def get_random_fingerprint(user_agent: str = "") -> str:
+    """
+    Get device-appropriate random fingerprint
+
+    Args:
+        user_agent: HTTP User-Agent header (optional)
+
+    Returns:
+        TLS fingerprint string (chrome, firefox, safari, edge, ios, android, or random)
+    """
+    if not user_agent:
+        # No User-Agent: return 'random' to let Xray client decide
+        return 'random'
+
+    fingerprints, weights = get_fingerprints_for_device(user_agent)
+    return random.choices(fingerprints, weights=weights, k=1)[0]
+
+
+def add_or_replace_fingerprint(vless_url: str, user_agent: str = "") -> str:
+    """
+    Add or replace fp= parameter in VLESS URL with device-appropriate random fingerprint
+
+    Args:
+        vless_url: Original VLESS URL (may or may not have fp= already)
+        user_agent: HTTP User-Agent for device detection
+
+    Returns:
+        VLESS URL with randomized fp= parameter
+    """
+    # Get device-appropriate random fingerprint
+    fp = get_random_fingerprint(user_agent)
+
+    # Remove existing fp= if present (handles all positions)
+    vless_url = re.sub(r'&fp=[^&#]+', '', vless_url)           # &fp=xxx
+    vless_url = re.sub(r'\?fp=[^&#]+&', '?', vless_url)        # ?fp=xxx& (first param)
+    vless_url = re.sub(r'\?fp=[^&#]+#', '?#', vless_url)       # ?fp=xxx# (only param with remark)
+    vless_url = re.sub(r'\?fp=[^&#]+$', '', vless_url)         # ?fp=xxx (only param, no remark)
+
+    # Clean up double separators
+    vless_url = vless_url.replace('?&', '?')
+    vless_url = vless_url.replace('?#', '#')
+
+    # Add new random fp= parameter
+    if '?' in vless_url:
+        # Has query params - append to them
+        if '#' in vless_url:
+            # Has remark: insert before #
+            base, remark = vless_url.rsplit('#', 1)
+            vless_url = f"{base}&fp={fp}#{remark}"
+        else:
+            # No remark: append to end
+            vless_url = f"{vless_url}&fp={fp}"
+    else:
+        # No query params - add them
+        if '#' in vless_url:
+            # Has remark: insert before #
+            base, remark = vless_url.rsplit('#', 1)
+            vless_url = f"{base}?fp={fp}#{remark}"
+        else:
+            # No remark: append to end
+            vless_url = f"{vless_url}?fp={fp}"
+
+    return vless_url
+
 
 @app.get("/health")
 async def health():
@@ -21,7 +125,7 @@ async def health():
 
 
 @app.get("/{client_email}")
-async def get_subscription(client_email: str, db: Session = Depends(get_db)):
+async def get_subscription(client_email: str, request: Request, db: Session = Depends(get_db)):
     """
     Get subscription for client
     Returns base64 encoded VLESS URLs (one per line) with auto-update headers
@@ -88,6 +192,11 @@ async def get_subscription(client_email: str, db: Session = Depends(get_db)):
     vless_urls = []
     for country in countries:
         vless_urls.extend(country_groups[country])
+
+    # Apply fingerprint randomization if enabled
+    if ENABLE_FP_RANDOMIZATION:
+        user_agent = request.headers.get("User-Agent", "")
+        vless_urls = [add_or_replace_fingerprint(url, user_agent) for url in vless_urls]
 
     subscription_content = "\n".join(vless_urls)
 
