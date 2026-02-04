@@ -118,6 +118,54 @@ def add_or_replace_fingerprint(vless_url: str, user_agent: str = "") -> str:
     return vless_url
 
 
+def add_standard_alpn(vless_url: str) -> str:
+    """
+    Add standard browser ALPN (h2,http/1.1) to VLESS URL
+
+    All modern browsers (Chrome, Firefox, Safari, Edge) send this ALPN list
+    in TLS handshakes. Adding it makes VPN traffic indistinguishable from
+    real browser traffic at the TLS handshake level.
+
+    Args:
+        vless_url: Original VLESS URL
+
+    Returns:
+        VLESS URL with alpn=h2,http/1.1 parameter
+    """
+    # Standard browser ALPN: what Chrome/Firefox/Safari send
+    alpn = 'h2,http/1.1'
+
+    # Only add ALPN to TLS connections (not Reality, which handles it differently)
+    if 'security=tls' not in vless_url:
+        return vless_url
+
+    # Skip if ALPN already present (don't override existing config)
+    if 'alpn=' in vless_url:
+        return vless_url
+
+    # Add alpn parameter in correct position
+    if '?' in vless_url:
+        # Has query params - append to them
+        if '#' in vless_url:
+            # Has remark: insert before #
+            base, remark = vless_url.rsplit('#', 1)
+            vless_url = f"{base}&alpn={alpn}#{remark}"
+        else:
+            # No remark: append to end
+            vless_url = f"{vless_url}&alpn={alpn}"
+    else:
+        # No query params - add them
+        if '#' in vless_url:
+            # Has remark: insert before #
+            base, remark = vless_url.rsplit('#', 1)
+            vless_url = f"{base}?alpn={alpn}#{remark}"
+        else:
+            # No remark: append to end
+            vless_url = f"{vless_url}?alpn={alpn}"
+
+    return vless_url
+
+
 @app.get("/health")
 async def health():
     """Health check"""
@@ -193,10 +241,13 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     for country in countries:
         vless_urls.extend(country_groups[country])
 
-    # Apply fingerprint randomization if enabled
+    # Apply fingerprint randomization and ALPN if enabled
     if ENABLE_FP_RANDOMIZATION:
         user_agent = request.headers.get("User-Agent", "")
+        # Apply fingerprint randomization (device-aware)
         vless_urls = [add_or_replace_fingerprint(url, user_agent) for url in vless_urls]
+        # Apply standard browser ALPN to all TLS URLs
+        vless_urls = [add_standard_alpn(url) for url in vless_urls]
 
     subscription_content = "\n".join(vless_urls)
 
