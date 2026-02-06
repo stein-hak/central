@@ -241,13 +241,14 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     for country in countries:
         vless_urls.extend(country_groups[country])
 
-    # Apply fingerprint randomization and ALPN if enabled
+    # Apply fingerprint randomization if enabled
     if ENABLE_FP_RANDOMIZATION:
         user_agent = request.headers.get("User-Agent", "")
         # Apply fingerprint randomization (device-aware)
         vless_urls = [add_or_replace_fingerprint(url, user_agent) for url in vless_urls]
         # Apply standard browser ALPN to all TLS URLs
-        vless_urls = [add_standard_alpn(url) for url in vless_urls]
+        # DISABLED: Causing connection issues, testing fingerprint only
+        # vless_urls = [add_standard_alpn(url) for url in vless_urls]
 
     subscription_content = "\n".join(vless_urls)
 
