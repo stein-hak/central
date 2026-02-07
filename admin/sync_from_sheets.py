@@ -324,7 +324,11 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
         print(f"⚠️  Limiting to first {limit} of {total_users} users\n")
 
     # Get existing users from API
-    existing_users = get_existing_users(api_url, session_id)
+    existing_users_list = get_existing_users(api_url, session_id)
+
+    # Build lookups by both telegram_id AND client_email
+    existing_by_telegram = {u["telegram_id"]: u for u in existing_users_list}
+    existing_by_email = {u["client_email"]: u for u in existing_users_list}
 
     # Sync
     sync_stats = {
@@ -333,21 +337,61 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
         "unchanged": 0,
         "disabled": 0,
         "enabled": 0,
+        "deleted_conflicts": 0,
         "errors": []
     }
 
-    # Separate users into updates and creations
+    # Separate users into updates, creations, and conflicts
     users_to_update = []
     users_to_create = []
+    conflicts_to_delete = []  # Wrong telegram_id in API, will delete and recreate
 
     for user in users:
         telegram_id = user["telegram_id"]
-        if telegram_id in existing_users:
+        client_email = user["client_email"]
+
+        # Case 1: Exists by telegram_id → update
+        if telegram_id in existing_by_telegram:
             users_to_update.append(user)
+
+        # Case 2: Same email, different telegram_id → conflict! Delete old, create new
+        elif client_email in existing_by_email:
+            old_user = existing_by_email[client_email]
+            print(f"⚠️  CONFLICT: {client_email}")
+            print(f"   API has telegram_id={old_user['telegram_id']}, Sheets has telegram_id={telegram_id}")
+            print(f"   Will delete API user and recreate from Sheets (Sheets = source of truth)")
+            conflicts_to_delete.append(old_user["telegram_id"])
+            users_to_create.append(user)
+
+        # Case 3: New user → create
         else:
             users_to_create.append(user)
 
-    print(f"📊 Planning: {len(users_to_update)} updates, {len(users_to_create)} new users\n")
+    print(f"📊 Planning: {len(users_to_update)} updates, {len(users_to_create)} new users, {len(conflicts_to_delete)} conflicts to resolve\n")
+
+    # First: Delete conflicting users (wrong telegram_id in API)
+    if conflicts_to_delete:
+        print(f"🗑️  Deleting {len(conflicts_to_delete)} conflicting users from API...\n")
+        for wrong_telegram_id in conflicts_to_delete:
+            try:
+                print(f"   Deleting telegram_id={wrong_telegram_id}...")
+                if not dry_run:
+                    response = requests.delete(
+                        f"{api_url}/api/users/{wrong_telegram_id}",
+                        cookies={"session_id": session_id}
+                    )
+                    if response.status_code == 200:
+                        print(f"   ✅ Deleted")
+                        sync_stats["deleted_conflicts"] += 1
+                    else:
+                        raise Exception(f"API error {response.status_code}")
+                else:
+                    print(f"   (DRY RUN - not deleted)")
+                    sync_stats["deleted_conflicts"] += 1
+            except Exception as e:
+                print(f"   ❌ Error: {e}")
+                sync_stats["errors"].append(f"Delete conflict {wrong_telegram_id}: {e}")
+        print()
 
     # Process updates (sequential)
     for user in users_to_update:
@@ -355,7 +399,7 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
         client_email = user["client_email"]
 
         # Check if update needed
-        existing = existing_users[telegram_id]
+        existing = existing_by_telegram[telegram_id]
         changes = []
 
         if existing["payment_status"] != user["payment_status"]:
@@ -491,6 +535,8 @@ def sync_mode(sheets_url, api_url, admin_password, dry_run=False, limit=None):
     print(f"✨ Created: {sync_stats['created']}")
     print(f"🔄 Updated: {sync_stats['updated']}")
     print(f"⏭️  Unchanged: {sync_stats['unchanged']}")
+    if sync_stats['deleted_conflicts'] > 0:
+        print(f"🗑️  Deleted conflicts: {sync_stats['deleted_conflicts']}")
     if sync_stats['disabled'] > 0 or sync_stats['enabled'] > 0:
         print(f"\n🔒 Disabled (NOT_PAID): {sync_stats['disabled']}")
         print(f"🔓 Enabled (PAID/TEST/PROMO): {sync_stats['enabled']}")
