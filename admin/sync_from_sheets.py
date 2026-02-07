@@ -244,8 +244,8 @@ def get_existing_users(api_url, session_id):
     users = data.get("users", [])  # API returns {"users": [...]}
     print(f"   Found {len(users)} existing users\n")
 
-    # Create lookup by telegram_id
-    return {user["telegram_id"]: user for user in users}
+    # Return list of users (not dict)
+    return users
 
 def create_user(api_url, session_id, user_data, dry_run=False):
     """Create new user via API"""
