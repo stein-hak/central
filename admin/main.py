@@ -2880,10 +2880,16 @@ async def create_users_batch(request: Request, db: Session = Depends(get_db)):
         if not telegram_id or not client_email:
             continue  # Skip invalid entries
 
-        # Check if user already exists
+        # Check if user already exists by telegram_id
         existing_user = db.query(User).filter(User.telegram_id == telegram_id).first()
         if existing_user:
             continue  # Skip existing users
+
+        # Check if client_email already exists
+        existing_client = db.query(Client).filter(Client.email == client_email).first()
+        if existing_client:
+            print(f"  ⚠️  Skipping telegram_id={telegram_id}: client_email={client_email} already exists")
+            continue  # Skip if email is taken
 
         # Parse dates
         payment_date = None
