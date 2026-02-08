@@ -505,7 +505,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
 
                 new_client = {
                     "id": str(key_uuid),
-                    "flow": "xtls-rprx-vision" if transport == "gRPC" else "",
+                    "flow": "",  # Empty for both gRPC and XHTTP (no XTLS)
                     "email": full_email,
                     "limitIp": 0,
                     "totalGB": 0,
