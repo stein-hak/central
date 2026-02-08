@@ -2348,112 +2348,64 @@ async def recreate_client_on_nodes(
     client_id: int,
     db: Session = Depends(get_db)
 ):
-    """Recreate client on all nodes (fixes broken flow settings)"""
+    """
+    Recreate client on ALL nodes (fixes broken flow settings)
+    - Deletes client from all inbounds on all nodes (gRPC, XHTTP, etc.)
+    - Recreates client with same UUID on all nodes
+    """
     check_auth(request)
 
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Get all keys for this client (excluding manual keys)
-    keys = db.query(Key).filter(
+    # Get ALL nodes (not just nodes with existing keys)
+    nodes = db.query(Node).filter(Node.enabled == True).all()
+
+    if not nodes:
+        return {"message": "No enabled nodes found", "results": []}
+
+    # Get existing UUID from first key, or generate new one
+    existing_key = db.query(Key).filter(
         Key.client_id == client_id,
         Key.manual == False
-    ).all()
+    ).first()
 
-    if not keys:
-        return {"message": "No keys found for client", "results": []}
+    if existing_key:
+        client_uuid = existing_key.uuid
+    else:
+        # Generate new UUID if no keys exist
+        client_uuid = str(uuid.uuid4())
 
     results = []
 
-    for key in keys:
-        node = db.query(Node).filter(Node.id == key.node_id).first()
-        if not node:
-            continue
-
+    # Recreate on ALL nodes
+    for node in nodes:
         try:
-            session = requests.Session()
+            # Use sync_client_to_node which handles:
+            # - Deletion from all inbounds (gRPC, XHTTP)
+            # - Recreation with correct flow settings
+            # - Saving keys to database
+            success, message = sync_client_to_node(node, client, client_uuid, db)
 
-            # Login to node
-            login_response = session.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password},
-                verify=False,
-                timeout=10
-            )
-
-            if login_response.status_code != 200:
-                results.append({
-                    "node": node.name,
-                    "success": False,
-                    "message": f"Login failed: {login_response.status_code}"
-                })
-                continue
-
-            # Delete client
-            delete_response = session.post(
-                f"{node.url}/panel/api/inbounds/{key.inbound_id}/delClientByEmail/{client.email}",
-                verify=False,
-                timeout=10
-            )
-
-            # Recreate client with correct flow
-            client_config = {
-                "id": key.inbound_id,
-                "settings": json.dumps({
-                    "clients": [{
-                        "id": str(key.uuid),
-                        "email": client.email,
-                        "enable": client.enabled,
-                        "flow": "",  # Empty flow - correct!
-                        "limitIp": 0,
-                        "totalGB": 0,
-                        "expiryTime": 0,
-                        "subId": "",
-                        "tgId": ""
-                    }]
-                })
-            }
-
-            add_response = session.post(
-                f"{node.url}/panel/api/inbounds/addClient",
-                json=client_config,
-                verify=False,
-                timeout=10
-            )
-
-            if add_response.status_code == 200:
-                add_result = add_response.json()
-                if add_result.get("success"):
-                    results.append({
-                        "node": node.name,
-                        "success": True,
-                        "message": "Client recreated successfully"
-                    })
-                else:
-                    results.append({
-                        "node": node.name,
-                        "success": False,
-                        "message": f"Add failed: {add_result}"
-                    })
-            else:
-                results.append({
-                    "node": node.name,
-                    "success": False,
-                    "message": f"Add failed: {add_response.status_code}"
-                })
+            results.append({
+                "node": node.name,
+                "success": success,
+                "message": message if success else f"Error: {message}"
+            })
 
         except Exception as e:
             results.append({
                 "node": node.name,
                 "success": False,
-                "message": str(e)
+                "message": f"Exception: {str(e)}"
             })
 
     success_count = sum(1 for r in results if r["success"])
 
     return {
         "client_email": client.email,
+        "client_uuid": client_uuid,
         "total_nodes": len(results),
         "success_count": success_count,
         "results": results
