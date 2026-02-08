@@ -2342,6 +2342,124 @@ async def add_manual_keys(
     }
 
 
+@app.post("/api/clients/{client_id}/recreate")
+async def recreate_client_on_nodes(
+    request: Request,
+    client_id: int,
+    db: Session = Depends(get_db)
+):
+    """Recreate client on all nodes (fixes broken flow settings)"""
+    check_auth(request)
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Get all keys for this client (excluding manual keys)
+    keys = db.query(Key).filter(
+        Key.client_id == client_id,
+        Key.manual == False
+    ).all()
+
+    if not keys:
+        return {"message": "No keys found for client", "results": []}
+
+    results = []
+
+    for key in keys:
+        node = db.query(Node).filter(Node.id == key.node_id).first()
+        if not node:
+            continue
+
+        try:
+            session = requests.Session()
+
+            # Login to node
+            login_response = session.post(
+                f"{node.url}/login",
+                data={"username": node.username, "password": node.password},
+                verify=False,
+                timeout=10
+            )
+
+            if login_response.status_code != 200:
+                results.append({
+                    "node": node.name,
+                    "success": False,
+                    "message": f"Login failed: {login_response.status_code}"
+                })
+                continue
+
+            # Delete client
+            delete_response = session.post(
+                f"{node.url}/panel/api/inbounds/{key.inbound_id}/delClientByEmail/{client.email}",
+                verify=False,
+                timeout=10
+            )
+
+            # Recreate client with correct flow
+            client_config = {
+                "id": key.inbound_id,
+                "settings": json.dumps({
+                    "clients": [{
+                        "id": str(key.uuid),
+                        "email": client.email,
+                        "enable": client.enabled,
+                        "flow": "",  # Empty flow - correct!
+                        "limitIp": 0,
+                        "totalGB": 0,
+                        "expiryTime": 0,
+                        "subId": "",
+                        "tgId": ""
+                    }]
+                })
+            }
+
+            add_response = session.post(
+                f"{node.url}/panel/api/inbounds/addClient",
+                json=client_config,
+                verify=False,
+                timeout=10
+            )
+
+            if add_response.status_code == 200:
+                add_result = add_response.json()
+                if add_result.get("success"):
+                    results.append({
+                        "node": node.name,
+                        "success": True,
+                        "message": "Client recreated successfully"
+                    })
+                else:
+                    results.append({
+                        "node": node.name,
+                        "success": False,
+                        "message": f"Add failed: {add_result}"
+                    })
+            else:
+                results.append({
+                    "node": node.name,
+                    "success": False,
+                    "message": f"Add failed: {add_response.status_code}"
+                })
+
+        except Exception as e:
+            results.append({
+                "node": node.name,
+                "success": False,
+                "message": str(e)
+            })
+
+    success_count = sum(1 for r in results if r["success"])
+
+    return {
+        "client_email": client.email,
+        "total_nodes": len(results),
+        "success_count": success_count,
+        "results": results
+    }
+
+
 @app.delete("/api/keys/{key_id}")
 async def delete_key(request: Request, key_id: int, db: Session = Depends(get_db)):
     """Delete a specific key (only manual keys can be deleted this way)"""

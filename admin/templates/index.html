@@ -795,7 +795,8 @@
                 confirm_check_renewals: 'Check all users and disable those past renewal date?',
                 alert_renewals_checked: 'Renewal check complete',
                 disabled_count: 'Disabled',
-                alert_user_toggled: 'User status updated successfully'
+                alert_user_toggled: 'User status updated successfully',
+                btn_recreate: 'Recreate'
             },
             ru: {
                 title: 'Менеджер подписок',
@@ -914,7 +915,8 @@
                 confirm_check_renewals: 'Проверить всех пользователей и отключить тех, у кого истёк срок продления?',
                 alert_renewals_checked: 'Проверка продлений завершена',
                 disabled_count: 'Отключено',
-                alert_user_toggled: 'Статус пользователя успешно обновлён'
+                alert_user_toggled: 'Статус пользователя успешно обновлён',
+                btn_recreate: 'Пересоздать'
             }
         };
 
@@ -1181,6 +1183,7 @@
                         <button class="btn btn-primary" onclick="showSubscription(${client.id})">${translations[currentLang].btn_sub_link}</button>
                         <button class="btn" style="background: #3498db; color: white;" onclick="showKeys(${client.id})">${translations[currentLang].btn_view_keys}</button>
                         <button class="btn" style="background: #f39c12; color: white;" onclick="showIpLimitModal(${client.id}, '${client.email}')">${translations[currentLang].btn_edit_limit}</button>
+                        <button class="btn" style="background: #9b59b6; color: white;" onclick="recreateClient(${client.id}, '${client.email}')" title="Recreate on all nodes (fix broken flow)">${translations[currentLang].btn_recreate || 'Recreate'}</button>
                         <button class="btn btn-danger" onclick="deleteClient(${client.id})">${translations[currentLang].btn_delete}</button>
                     </td>
                 `;
@@ -1363,6 +1366,44 @@
             });
 
             loadClients();
+        }
+
+        // Recreate client on all nodes
+        async function recreateClient(id, email) {
+            if (!confirm(`Recreate client "${email}" on all nodes?\n\nThis will delete and recreate the client with correct flow settings (fixes broken XTLS flow).`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/clients/${id}/recreate`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const successCount = data.success_count || 0;
+                    const totalNodes = data.total_nodes || 0;
+
+                    let message = `Client recreated on ${successCount}/${totalNodes} nodes\n\n`;
+
+                    // Show detailed results
+                    if (data.results && data.results.length > 0) {
+                        message += 'Details:\n';
+                        data.results.forEach(result => {
+                            const status = result.success ? '✓' : '✗';
+                            message += `${status} ${result.node}: ${result.message}\n`;
+                        });
+                    }
+
+                    alert(message);
+                    loadClients();
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
         }
 
         // Show subscription
