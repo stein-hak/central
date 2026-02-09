@@ -1145,7 +1145,21 @@ async def async_backup_all_nodes(nodes: List[Node], backup_path: str) -> List[di
 async def home(request: Request):
     """Main admin page"""
     session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in sessions:
+    if not session_id:
+        return RedirectResponse(url="/login")
+
+    # Check Redis first, fall back to in-memory
+    session_valid = False
+    if redis_client:
+        try:
+            session_valid = redis_client.exists(f"session:{session_id}")
+        except Exception as e:
+            print(f"Redis error in home: {e}")
+            session_valid = session_id in sessions
+    else:
+        session_valid = session_id in sessions
+
+    if not session_valid:
         return RedirectResponse(url="/login")
 
     return templates.TemplateResponse("index.html", {"request": request})
