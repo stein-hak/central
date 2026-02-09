@@ -2717,6 +2717,7 @@ async def get_users(request: Request, page: int = 1, limit: int = 50, search: st
             "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             "subscription_url": None,
             "client_email": None,
+            "client_id": None,
             "enabled": False
         }
 
@@ -2725,6 +2726,7 @@ async def get_users(request: Request, page: int = 1, limit: int = 50, search: st
             subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
             user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
             user_data["client_email"] = user.client.email
+            user_data["client_id"] = user.client.id
             user_data["enabled"] = user.client.enabled
 
         result.append(user_data)
@@ -2759,7 +2761,8 @@ async def get_user(request: Request, telegram_id: int, db: Session = Depends(get
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
         "subscription_url": None,
-        "client_email": None
+        "client_email": None,
+        "client_id": None
     }
 
     # Get associated client info
@@ -2767,6 +2770,7 @@ async def get_user(request: Request, telegram_id: int, db: Session = Depends(get
         subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
         user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
         user_data["client_email"] = user.client.email
+        user_data["client_id"] = user.client.id
 
     return user_data
 
