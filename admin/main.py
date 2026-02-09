@@ -775,40 +775,77 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
 
             inbounds = inbounds_response.json().get("obj", [])
 
-            # Find inbound IDs
-            grpc_inbound_id = None
-            xhttp_inbound_id = None
+            # Find inbounds and clients
+            grpc_inbound = None
+            xhttp_inbound = None
 
             for inbound in inbounds:
                 remark = inbound.get("remark", "").lower()
                 if "grpc" in remark:
-                    grpc_inbound_id = inbound.get("id")
+                    grpc_inbound = inbound
                 elif "xhttp" in remark:
-                    xhttp_inbound_id = inbound.get("id")
+                    xhttp_inbound = inbound
 
             # Toggle both inbounds IN PARALLEL
             toggle_tasks = []
 
-            if grpc_inbound_id:
-                toggle_data = {"email": client_email, "enable": enabled}
-                toggle_tasks.append(
-                    http_client.post(
-                        f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/updateClient",
-                        json=toggle_data,
-                        cookies=cookies
-                    )
-                )
+            # Toggle gRPC inbound
+            if grpc_inbound:
+                settings = json.loads(grpc_inbound.get("settings", "{}"))
+                clients = settings.get("clients", [])
 
-            if xhttp_inbound_id:
+                # Find client and update enable field
+                client_found = False
+                for client in clients:
+                    if client.get("email") == client_email:
+                        client["enable"] = enabled
+                        client_uuid = client.get("id")
+                        client_found = True
+
+                        # Prepare update payload
+                        update_payload = {
+                            "id": grpc_inbound["id"],
+                            "settings": json.dumps({"clients": [client]})
+                        }
+
+                        toggle_tasks.append(
+                            http_client.post(
+                                f"{node.url}/panel/api/inbounds/updateClient/{client_uuid}",
+                                json=update_payload,
+                                cookies=cookies
+                            )
+                        )
+                        break
+
+                if not client_found:
+                    result["message"] = f"Client {client_email} not found in gRPC inbound"
+
+            # Toggle XHTTP inbound
+            if xhttp_inbound:
                 xhttp_email = f"{client_email}-xhttp"
-                toggle_data = {"email": xhttp_email, "enable": enabled}
-                toggle_tasks.append(
-                    http_client.post(
-                        f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/updateClient",
-                        json=toggle_data,
-                        cookies=cookies
-                    )
-                )
+                settings = json.loads(xhttp_inbound.get("settings", "{}"))
+                clients = settings.get("clients", [])
+
+                # Find client and update enable field
+                for client in clients:
+                    if client.get("email") == xhttp_email:
+                        client["enable"] = enabled
+                        client_uuid = client.get("id")
+
+                        # Prepare update payload
+                        update_payload = {
+                            "id": xhttp_inbound["id"],
+                            "settings": json.dumps({"clients": [client]})
+                        }
+
+                        toggle_tasks.append(
+                            http_client.post(
+                                f"{node.url}/panel/api/inbounds/updateClient/{client_uuid}",
+                                json=update_payload,
+                                cookies=cookies
+                            )
+                        )
+                        break
 
             # Execute all toggles in parallel
             toggled_count = 0
@@ -816,7 +853,10 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
                 toggle_responses = await asyncio.gather(*toggle_tasks, return_exceptions=True)
                 for response in toggle_responses:
                     if not isinstance(response, Exception):
-                        toggled_count += 1
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            if response_data.get("success"):
+                                toggled_count += 1
 
             result["success"] = toggled_count > 0
             result["message"] = f"Toggled {toggled_count} inbounds to {'enabled' if enabled else 'disabled'}"
