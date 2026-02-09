@@ -7,8 +7,10 @@ Usage:
     python3 find_and_recreate_broken_clients.py <node_db_path> <central_api_url> [--dry-run]
 
 Example:
-    python3 find_and_recreate_broken_clients.py /opt/3x-ui/data/x-ui.db https://central.example.com
-    python3 find_and_recreate_broken_clients.py /opt/3x-ui/data/x-ui.db https://central.example.com --dry-run
+    python3 find_and_recreate_broken_clients.py /opt/3x-ui/data/x-ui.db http://100.64.0.2:8000
+    python3 find_and_recreate_broken_clients.py /opt/3x-ui/data/x-ui.db http://100.64.0.2:8000 --dry-run
+
+Note: You'll be prompted for the admin password when running in live mode.
 """
 
 import sys
@@ -63,7 +65,7 @@ def get_client_id_from_central(api_url, session, email):
         response = session.get(
             f"{api_url}/api/clients",
             params={"search": email, "limit": 100},
-            timeout=10
+            timeout=30  # Increased timeout for search
         )
 
         if response.status_code == 200:
@@ -87,7 +89,7 @@ def recreate_client_centrally(api_url, session, client_id, email):
     try:
         response = session.post(
             f"{api_url}/api/clients/{client_id}/recreate",
-            timeout=30
+            timeout=180  # 3 minutes - recreating on 17 nodes takes time
         )
 
         if response.status_code == 200:
@@ -103,11 +105,25 @@ def recreate_client_centrally(api_url, session, client_id, email):
         return False, str(e)
 
 
-def login_to_central(api_url, session_cookie):
-    """Create session with existing cookie"""
+def login_to_central(api_url, password):
+    """Login to central API and return session with cookie"""
     session = requests.Session()
-    session.cookies.set("session_id", session_cookie)
     session.verify = False  # Disable SSL verification
+
+    response = session.post(
+        f"{api_url}/login",
+        data={"password": password},
+        allow_redirects=False,
+        timeout=10
+    )
+
+    if response.status_code not in [200, 302]:
+        raise Exception(f"Login failed: {response.status_code}")
+
+    session_id = response.cookies.get("session_id")
+    if not session_id:
+        raise Exception("No session_id cookie received after login")
+
     return session
 
 
@@ -157,25 +173,20 @@ def main():
         print(f"\nWould recreate {len(broken_clients)} clients via central API")
         return
 
-    # Get session cookie from user
+    # Get password from user
     print("🔐 Authentication required for central API")
     print(f"    API URL: {central_api_url}")
     print()
-    session_cookie = input("Enter your session_id cookie (from browser): ").strip()
 
-    if not session_cookie:
-        print("❌ Session cookie required!")
+    import getpass
+    password = getpass.getpass("Enter admin password: ")
+
+    if not password:
+        print("❌ Password required!")
         sys.exit(1)
 
-    session = login_to_central(central_api_url, session_cookie)
-
-    # Test authentication
     try:
-        test_response = session.get(f"{central_api_url}/api/nodes", timeout=10)
-        if test_response.status_code != 200:
-            print(f"❌ Authentication failed: {test_response.status_code}")
-            print("   Make sure your session_id cookie is valid")
-            sys.exit(1)
+        session = login_to_central(central_api_url, password)
         print("   ✅ Authenticated\n")
     except Exception as e:
         print(f"❌ Connection failed: {e}")

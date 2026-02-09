@@ -1,4 +1,17 @@
 services:
+  # Redis for session storage
+  redis:
+    image: redis:7-alpine
+    container_name: xui-central-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis123}
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - xui-network
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
@@ -25,10 +38,12 @@ services:
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/xui_central
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       SUBSCRIPTION_URL: ${SUBSCRIPTION_URL:-http://localhost:8001}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       - postgres
+      - redis
     networks:
       - xui-network
     restart: unless-stopped
@@ -56,6 +71,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
 networks:
   xui-network:

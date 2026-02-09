@@ -25,7 +25,20 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Subscription Manager Admin")
 templates = Jinja2Templates(directory="templates")
 
-# Simple session storage (in production use Redis)
+# Redis session storage for multi-worker support
+import redis as redis_lib
+
+redis_url = os.getenv("REDIS_URL", "redis://:redis123@localhost:6379/0")
+try:
+    redis_client = redis_lib.from_url(redis_url, decode_responses=True)
+    redis_client.ping()
+    print(f"✅ Connected to Redis: {redis_url}")
+except Exception as e:
+    print(f"⚠️  Redis connection failed: {e}")
+    print("⚠️  Falling back to in-memory sessions (single worker only)")
+    redis_client = None
+
+# Fallback in-memory storage if Redis unavailable
 sessions = {}
 
 # Stats cache with TTL (cache stats for 30 seconds to avoid hammering nodes)
@@ -42,8 +55,23 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 def check_auth(request: Request):
     """Check if user is authenticated"""
     session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in sessions:
+    if not session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Check Redis first, fall back to in-memory
+    if redis_client:
+        try:
+            session_exists = redis_client.exists(f"session:{session_id}")
+            if not session_exists:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+        except Exception as e:
+            print(f"Redis error in check_auth: {e}")
+            if session_id not in sessions:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+    else:
+        if session_id not in sessions:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+
     return True
 
 
@@ -1134,7 +1162,17 @@ async def login(password: str = Form(...)):
     """Handle login"""
     if password == ADMIN_PASSWORD:
         session_id = str(uuid.uuid4())
-        sessions[session_id] = {"authenticated": True}
+
+        # Store session in Redis with 24h expiry, or in-memory as fallback
+        if redis_client:
+            try:
+                redis_client.setex(f"session:{session_id}", 86400, "authenticated")  # 24 hours
+            except Exception as e:
+                print(f"Redis error in login: {e}")
+                sessions[session_id] = {"authenticated": True}
+        else:
+            sessions[session_id] = {"authenticated": True}
+
         response = RedirectResponse(url="/", status_code=302)
         response.set_cookie("session_id", session_id)
         return response
@@ -1146,8 +1184,18 @@ async def login(password: str = Form(...)):
 async def logout(request: Request):
     """Handle logout"""
     session_id = request.cookies.get("session_id")
-    if session_id in sessions:
+
+    # Delete from Redis or in-memory
+    if redis_client and session_id:
+        try:
+            redis_client.delete(f"session:{session_id}")
+        except Exception as e:
+            print(f"Redis error in logout: {e}")
+            if session_id in sessions:
+                del sessions[session_id]
+    elif session_id in sessions:
         del sessions[session_id]
+
     response = RedirectResponse(url="/login")
     response.delete_cookie("session_id")
     return response
