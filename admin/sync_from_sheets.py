@@ -233,19 +233,31 @@ def login_to_api(api_url, admin_password):
     return session_id
 
 def get_existing_users(api_url, session_id):
-    """Get all existing users from API"""
+    """Get all existing users from API (with pagination)"""
     print(f"📋 Fetching existing users from API...")
-    response = requests.get(
-        f"{api_url}/api/users",
-        cookies={"session_id": session_id}
-    )
-    response.raise_for_status()
-    data = response.json()
-    users = data.get("users", [])  # API returns {"users": [...]}
-    print(f"   Found {len(users)} existing users\n")
+    all_users = []
+    page = 1
 
-    # Return list of users (not dict)
-    return users
+    while True:
+        response = requests.get(
+            f"{api_url}/api/users",
+            params={"page": page, "limit": 100},
+            cookies={"session_id": session_id}
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        users = data.get("users", [])
+        total_pages = data.get("total_pages", 1)
+
+        all_users.extend(users)
+
+        if page >= total_pages:
+            break
+        page += 1
+
+    print(f"   Found {len(all_users)} existing users\n")
+    return all_users
 
 def create_user(api_url, session_id, user_data, dry_run=False):
     """Create new user via API"""
