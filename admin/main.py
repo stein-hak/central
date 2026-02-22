@@ -2263,16 +2263,35 @@ async def get_client_keys(request: Request, client_id: int, db: Session = Depend
     # Get all keys for this client
     keys = db.query(Key).filter(Key.client_id == client_id).all()
 
-    # Get node names for each key
-    keys_details = []
+    # Group keys by transport type (extract from vless_url)
+    # We only want to show one key per transport type to the client
+    keys_by_transport = {}
+
     for key in keys:
         node = db.query(Node).filter(Node.id == key.node_id).first()
-        keys_details.append({
-            "key_id": key.id,
-            "node_name": node.name if node else "Manual",
-            "vless_url": key.vless_url,
-            "manual": key.manual
-        })
+
+        # Determine transport type from VLESS URL
+        transport = "grpc"  # default
+        if key.vless_url:
+            if "type=xhttp" in key.vless_url or "type=splithttp" in key.vless_url:
+                transport = "xhttp"
+            elif "type=tcp" in key.vless_url:
+                transport = "tcp"
+            elif "type=grpc" in key.vless_url:
+                transport = "grpc"
+
+        # Only keep first key of each transport type
+        if transport not in keys_by_transport:
+            keys_by_transport[transport] = {
+                "key_id": key.id,
+                "node_name": node.name if node else "Manual",
+                "vless_url": key.vless_url,
+                "manual": key.manual,
+                "transport": transport
+            }
+
+    # Convert to list
+    keys_details = list(keys_by_transport.values())
 
     return {
         "email": client.email,
