@@ -161,198 +161,117 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
         inbounds_data = inbounds_response.json()
         inbounds = inbounds_data.get("obj", [])
 
-        # Find VLESS-gRPC-Local inbound
-        vless_inbound = None
-        for inbound in inbounds:
-            if inbound.get("remark") == "VLESS-gRPC-Local":
-                vless_inbound = inbound
-                break
+        # Find ALL VLESS inbounds
+        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
-        if not vless_inbound:
-            raise Exception("VLESS-gRPC-Local inbound not found on node")
+        if not vless_inbounds:
+            raise Exception("No VLESS inbounds found on node")
 
-        inbound_id = vless_inbound["id"]
+        # Add client to ALL VLESS inbounds
+        first_vless_url = None
+        for idx, vless_inbound in enumerate(vless_inbounds):
+            inbound_id = vless_inbound["id"]
+            inbound_remark = vless_inbound.get("remark", "unknown")
 
-        # Parse existing settings to check if client already exists
-        settings = json.loads(vless_inbound.get("settings", "{}"))
-        clients_list = settings.get("clients", [])
+            # Create unique email per inbound using _0, _1, _2 suffix
+            client_email = f"{client.email}_{idx}"
 
-        # Check if client already exists
-        existing_client = None
-        for c in clients_list:
-            if c.get("email") == client.email:
-                existing_client = c
-                break
+            # Parse existing settings to check if client already exists
+            settings = json.loads(vless_inbound.get("settings", "{}"))
+            clients_list = settings.get("clients", [])
 
-        if existing_client:
-            # Delete existing client first (ignore errors if client doesn't exist)
-            try:
-                delete_response = session.post(
-                    f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
-                    verify=False,
-                    timeout=10
-                )
-                # Continue even if delete fails (client might be gone already)
-            except Exception:
-                pass  # Continue to add client anyway
+            # Check if client already exists
+            existing_client = None
+            for c in clients_list:
+                if c.get("email") == client_email:
+                    existing_client = c
+                    break
 
-        # Add client using addClient endpoint (safe, doesn't override inbound)
-        client_config = {
-            "id": inbound_id,
-            "settings": json.dumps({
-                "clients": [
-                    {
-                        "id": str(client_uuid),
-                        "flow": "",
-                        "email": client.email,
-                        "limitIp": 0,  # 0 = unlimited
-                        "totalGB": 0,
-                        "expiryTime": 0,
-                        "enable": client.enabled,
-                        "tgId": "",
-                        "subId": client.email
-                    }
-                ]
-            })
-        }
+            if existing_client:
+                # Delete existing client first (ignore errors if client doesn't exist)
+                try:
+                    delete_response = session.post(
+                        f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client_email}",
+                        verify=False,
+                        timeout=10
+                    )
+                    # Continue even if delete fails (client might be gone already)
+                except Exception:
+                    pass  # Continue to add client anyway
 
-        add_response = session.post(
-            f"{node.url}/panel/api/inbounds/addClient",
-            json=client_config,
-            verify=False,
-            timeout=10
-        )
+            # Add client using addClient endpoint (safe, doesn't override inbound)
+            client_config = {
+                "id": inbound_id,
+                "settings": json.dumps({
+                    "clients": [
+                        {
+                            "id": str(client_uuid),
+                            "flow": "",
+                            "email": client_email,
+                            "limitIp": 0,  # 0 = unlimited
+                            "totalGB": 0,
+                            "expiryTime": 0,
+                            "enable": client.enabled,
+                            "tgId": "",
+                            "subId": client_email
+                        }
+                    ]
+                })
+            }
 
-        if add_response.status_code != 200:
-            raise Exception(f"Failed to add client: {add_response.status_code}")
-
-        # Generate VLESS URL
-        vless_url = create_vless_url(node, client.email, str(client_uuid), inbound_id)
-
-        # Save key to database
-        existing_key = db.query(Key).filter(
-            Key.client_id == client.id,
-            Key.node_id == node.id,
-            Key.inbound_id == inbound_id
-        ).first()
-
-        if existing_key:
-            existing_key.uuid = client_uuid
-            existing_key.vless_url = vless_url
-            existing_key.manual = False  # Mark as auto-generated
-        else:
-            new_key = Key(
-                client_id=client.id,
-                node_id=node.id,
-                inbound_id=inbound_id,
-                uuid=client_uuid,
-                vless_url=vless_url,
-                manual=False  # Mark as auto-generated
+            add_response = session.post(
+                f"{node.url}/panel/api/inbounds/addClient",
+                json=client_config,
+                verify=False,
+                timeout=10
             )
-            db.add(new_key)
 
-        db.commit()
+            if add_response.status_code != 200:
+                print(f"   Warning: Failed to add client to {inbound_remark}: {add_response.status_code}")
+                continue
 
-        # ============================================================================
-        # Try to add client to XHTTP inbound if it exists
-        # ============================================================================
+            # Determine transport type from inbound remark or streamSettings
+            transport = "grpc"  # default
+            if "xhttp" in inbound_remark.lower():
+                transport = "xhttp"
+            elif "tcp" in inbound_remark.lower():
+                transport = "tcp"
 
-        xhttp_inbound = None
-        for inbound in inbounds:
-            if inbound.get("remark") == "VLESS-XHTTP":
-                xhttp_inbound = inbound
-                break
+            # Generate VLESS URL
+            vless_url = create_vless_url(node, client.email, str(client_uuid), inbound_id, transport=transport)
 
-        if xhttp_inbound:
-            try:
-                xhttp_inbound_id = xhttp_inbound["id"]
-                xhttp_email = f"{client.email}-xhttp"
+            # Save first URL for return value
+            if first_vless_url is None:
+                first_vless_url = vless_url
 
-                # Check if XHTTP client already exists
-                xhttp_settings = json.loads(xhttp_inbound.get("settings", "{}"))
-                xhttp_clients_list = xhttp_settings.get("clients", [])
+            # Save key to database
+            existing_key = db.query(Key).filter(
+                Key.client_id == client.id,
+                Key.node_id == node.id,
+                Key.inbound_id == inbound_id
+            ).first()
 
-                existing_xhttp_client = None
-                for c in xhttp_clients_list:
-                    if c.get("email") == xhttp_email:
-                        existing_xhttp_client = c
-                        break
-
-                if existing_xhttp_client:
-                    # Delete existing XHTTP client first
-                    try:
-                        session.post(
-                            f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
-                            verify=False,
-                            timeout=10
-                        )
-                    except Exception:
-                        pass  # Ignore delete errors
-
-                # Add client to XHTTP inbound
-                xhttp_client_config = {
-                    "id": xhttp_inbound_id,
-                    "settings": json.dumps({
-                        "clients": [
-                            {
-                                "id": str(client_uuid),
-                                "flow": "",
-                                "email": xhttp_email,
-                                "limitIp": 0,  # 0 = unlimited
-                                "totalGB": 0,
-                                "expiryTime": 0,
-                                "enable": client.enabled,
-                                "tgId": "",
-                                "subId": xhttp_email
-                            }
-                        ]
-                    })
-                }
-
-                xhttp_add_response = session.post(
-                    f"{node.url}/panel/api/inbounds/addClient",
-                    json=xhttp_client_config,
-                    verify=False,
-                    timeout=10
+            if existing_key:
+                existing_key.uuid = client_uuid
+                existing_key.vless_url = vless_url
+                existing_key.manual = False  # Mark as auto-generated
+            else:
+                new_key = Key(
+                    client_id=client.id,
+                    node_id=node.id,
+                    inbound_id=inbound_id,
+                    uuid=client_uuid,
+                    vless_url=vless_url,
+                    manual=False  # Mark as auto-generated
                 )
+                db.add(new_key)
 
-                if xhttp_add_response.status_code == 200:
-                    # Generate XHTTP VLESS URL
-                    xhttp_vless_url = create_vless_url(node, client.email, str(client_uuid), xhttp_inbound_id, transport="xhttp")
-
-                    # Save XHTTP key to database
-                    existing_xhttp_key = db.query(Key).filter(
-                        Key.client_id == client.id,
-                        Key.node_id == node.id,
-                        Key.inbound_id == xhttp_inbound_id
-                    ).first()
-
-                    if existing_xhttp_key:
-                        existing_xhttp_key.uuid = client_uuid
-                        existing_xhttp_key.vless_url = xhttp_vless_url
-                        existing_xhttp_key.manual = False
-                    else:
-                        xhttp_key = Key(
-                            client_id=client.id,
-                            node_id=node.id,
-                            inbound_id=xhttp_inbound_id,
-                            uuid=client_uuid,
-                            vless_url=xhttp_vless_url,
-                            manual=False
-                        )
-                        db.add(xhttp_key)
-
-                    db.commit()
-
-            except Exception as e:
-                # XHTTP addition failed, but gRPC succeeded - continue
-                print(f"Warning: Failed to add XHTTP key for {client.email} on {node.name}: {e}")
-                pass
+            db.commit()
 
         # Clear stats cache for this node
         clear_node_stats_cache(node.id)
 
-        return True, vless_url
+        return True, first_vless_url
 
     except Exception as e:
         return False, str(e)
@@ -501,31 +420,33 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
 
             inbounds = inbounds_response.json().get("obj", [])
 
-            # Find gRPC and XHTTP inbounds
-            grpc_inbound = None
-            xhttp_inbound = None
+            # Find ALL VLESS inbounds
+            vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
-            for inbound in inbounds:
-                remark = inbound.get("remark", "").lower()
-                if "grpc" in remark:
-                    grpc_inbound = inbound
-                elif "xhttp" in remark:
-                    xhttp_inbound = inbound
+            if not vless_inbounds:
+                result["errors"].append("No VLESS inbounds found")
+                return result
 
-            # Prepare both inbound updates in parallel
+            # Prepare all inbound updates in parallel
             update_tasks = []
 
-            for inbound, transport in [(grpc_inbound, "gRPC"), (xhttp_inbound, "XHTTP")]:
-                if not inbound:
-                    result["errors"].append(f"{transport} inbound not found")
-                    continue
-
+            for idx, inbound in enumerate(vless_inbounds):
                 # Generate UUID for this key
                 key_uuid = uuid.uuid4()
 
-                # Determine email suffix
-                email_suffix = "-xhttp" if transport == "XHTTP" else ""
-                full_email = f"{client_email}{email_suffix}"
+                # Create unique email per inbound using _0, _1, _2 suffix
+                full_email = f"{client_email}_{idx}"
+
+                # Determine transport type from inbound remark
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    transport = "xhttp"
+                elif "grpc" in inbound_remark:
+                    transport = "grpc"
+                elif "tcp" in inbound_remark:
+                    transport = "tcp"
+                else:
+                    transport = "grpc"  # default
 
                 # Prepare client data
                 settings = json.loads(inbound["settings"])
@@ -570,7 +491,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
                         cookies=cookies
                     ),
                     "uuid": str(key_uuid),
-                    "transport": transport,
+                    "transport": transport.upper(),
                     "email": full_email,
                     "inbound_id": inbound["id"]
                 })
@@ -679,36 +600,28 @@ async def async_delete_client_from_node(node: Node, client: Client, db: Session)
 
             inbounds = inbounds_response.json().get("obj", [])
 
-            # Find inbound IDs
-            grpc_inbound_id = None
-            xhttp_inbound_id = None
+            # Find ALL VLESS inbounds and check for matching clients
+            vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
-            for inbound in inbounds:
-                remark = inbound.get("remark", "").lower()
-                if "grpc" in remark:
-                    grpc_inbound_id = inbound.get("id")
-                elif "xhttp" in remark:
-                    xhttp_inbound_id = inbound.get("id")
-
-            # Delete from both inbounds IN PARALLEL
+            # Delete from all VLESS inbounds IN PARALLEL
             delete_tasks = []
 
-            if grpc_inbound_id:
-                delete_tasks.append(
-                    http_client.post(
-                        f"{node.url}/panel/api/inbounds/{grpc_inbound_id}/delClientByEmail/{client.email}",
-                        cookies=cookies
-                    )
-                )
+            for inbound in vless_inbounds:
+                # Parse existing clients in this inbound
+                settings = json.loads(inbound.get("settings", "{}"))
+                clients_list = settings.get("clients", [])
 
-            if xhttp_inbound_id:
-                xhttp_email = f"{client.email}-xhttp"
-                delete_tasks.append(
-                    http_client.post(
-                        f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
-                        cookies=cookies
-                    )
-                )
+                # Find all clients that match the base email (handles both old and new formats)
+                for existing_client in clients_list:
+                    existing_email = existing_client.get("email", "")
+                    # Match if email equals base email or starts with base email + separator
+                    if existing_email == client.email or existing_email.startswith(f"{client.email}_") or existing_email.startswith(f"{client.email}-"):
+                        delete_tasks.append(
+                            http_client.post(
+                                f"{node.url}/panel/api/inbounds/{inbound['id']}/delClientByEmail/{existing_email}",
+                                cookies=cookies
+                            )
+                        )
 
             # Execute all deletes in parallel
             deleted_count = 0
