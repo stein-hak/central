@@ -28,6 +28,7 @@ class Key(Base):
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"))
+    node_id = Column(Integer)
     vless_url = Column(Text, nullable=False)
 
     client = relationship("Client", back_populates="keys")
