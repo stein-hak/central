@@ -188,10 +188,35 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         raise HTTPException(status_code=403, detail="Client is disabled")
 
     # Get all keys for this client
-    keys = db.query(Key).filter(Key.client_id == client.id).all()
+    all_keys = db.query(Key).filter(Key.client_id == client.id).all()
 
-    if not keys:
+    if not all_keys:
         raise HTTPException(status_code=404, detail="No keys found for client")
+
+    # Filter to one key per transport type per node
+    # This prevents duplicate links when multiple inbounds of same type exist
+    keys_by_node_transport = {}
+
+    for key in all_keys:
+        # Determine transport from URL
+        transport = "grpc"  # default
+        if key.vless_url:
+            if "type=xhttp" in key.vless_url or "type=splithttp" in key.vless_url:
+                transport = "xhttp"
+            elif "type=tcp" in key.vless_url:
+                transport = "tcp"
+            elif "type=grpc" in key.vless_url:
+                transport = "grpc"
+
+        # Use (node_id, transport) as key to deduplicate
+        node_transport_key = (key.node_id, transport)
+
+        # Only keep first key of each (node, transport) combination
+        if node_transport_key not in keys_by_node_transport:
+            keys_by_node_transport[node_transport_key] = key
+
+    # Get deduplicated keys
+    keys = list(keys_by_node_transport.values())
 
     # Build subscription content (one URL per line)
     # Group keys by country, XHTTP first within each group, then randomize groups
