@@ -1371,7 +1371,7 @@ async def update_node(
     domain: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
-    upgraded: bool = Form(False),
+    upgraded: str = Form("false"),
     db: Session = Depends(get_db)
 ):
     """Update node"""
@@ -1394,7 +1394,7 @@ async def update_node(
     node.domain = domain
     node.username = username
     node.password = password
-    node.upgraded = upgraded
+    node.upgraded = upgraded.lower() in ('true', '1', 'yes', 'on')
 
     db.commit()
     db.refresh(node)

@@ -1102,12 +1102,18 @@
             formData.append('domain', document.getElementById('editNodeDomain').value);
             formData.append('username', document.getElementById('editNodeUsername').value);
             formData.append('password', document.getElementById('editNodePassword').value);
-            formData.append('upgraded', document.getElementById('editNodeUpgraded').checked);
+            formData.append('upgraded', document.getElementById('editNodeUpgraded').checked ? 'true' : 'false');
 
-            await fetch(`/api/nodes/${id}`, {
+            const response = await fetch(`/api/nodes/${id}`, {
                 method: 'PUT',
                 body: formData
             });
+
+            if (!response.ok) {
+                const error = await response.json();
+                alert(`Error updating node: ${error.detail || 'Unknown error'}`);
+                return;
+            }
 
             closeEditNodeModal();
             loadNodes();
