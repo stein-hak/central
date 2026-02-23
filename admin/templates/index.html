@@ -1096,27 +1096,40 @@
             e.preventDefault();
 
             const id = document.getElementById('editNodeId').value;
+            const upgraded = document.getElementById('editNodeUpgraded').checked;
+
+            console.log('Updating node:', id, 'upgraded:', upgraded);
+
             const formData = new FormData();
             formData.append('name', document.getElementById('editNodeName').value);
             formData.append('url', document.getElementById('editNodeUrl').value);
             formData.append('domain', document.getElementById('editNodeDomain').value);
             formData.append('username', document.getElementById('editNodeUsername').value);
             formData.append('password', document.getElementById('editNodePassword').value);
-            formData.append('upgraded', document.getElementById('editNodeUpgraded').checked ? 'true' : 'false');
+            formData.append('upgraded', upgraded ? 'true' : 'false');
 
-            const response = await fetch(`/api/nodes/${id}`, {
-                method: 'PUT',
-                body: formData
-            });
+            try {
+                const response = await fetch(`/api/nodes/${id}`, {
+                    method: 'PUT',
+                    body: formData
+                });
 
-            if (!response.ok) {
-                const error = await response.json();
-                alert(`Error updating node: ${error.detail || 'Unknown error'}`);
-                return;
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert(`Error updating node: ${error.detail || 'Unknown error'}`);
+                    console.error('Update failed:', error);
+                    return;
+                }
+
+                const result = await response.json();
+                console.log('Update successful:', result);
+
+                closeEditNodeModal();
+                loadNodes();
+            } catch (error) {
+                console.error('Network error:', error);
+                alert(`Network error: ${error.message}`);
             }
-
-            closeEditNodeModal();
-            loadNodes();
         });
 
         // Test node

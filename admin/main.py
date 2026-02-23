@@ -1377,6 +1377,8 @@ async def update_node(
     """Update node"""
     check_auth(request)
 
+    print(f"[UPDATE NODE] ID: {node_id}, upgraded: '{upgraded}' (type: {type(upgraded)})")
+
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -1389,12 +1391,15 @@ async def update_node(
             raise HTTPException(status_code=400, detail="Node name already exists")
 
     old_name = node.name
+    old_upgraded = node.upgraded
     node.name = name
     node.url = url.rstrip('/')
     node.domain = domain
     node.username = username
     node.password = password
     node.upgraded = upgraded.lower() in ('true', '1', 'yes', 'on')
+
+    print(f"[UPDATE NODE] Changed upgraded: {old_upgraded} -> {node.upgraded}")
 
     db.commit()
     db.refresh(node)
