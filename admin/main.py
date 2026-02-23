@@ -105,7 +105,16 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
     """
     import urllib.parse
 
-    domain = node.domain
+    # Determine domain based on upgraded status and transport
+    if node.upgraded:
+        # Upgraded nodes: use subdomain for HAProxy SNI routing
+        if transport == "xhttp":
+            domain = f"app.{node.domain}"  # app.domain -> xhttp-HA (20001)
+        else:
+            domain = f"api.{node.domain}"  # api.domain -> grpc-HA (20000)
+    else:
+        # Legacy nodes: use main domain with nginx
+        domain = node.domain
 
     if transport == "xhttp":
         # XHTTP transport: type=xhttp, path=/api
@@ -1362,6 +1371,7 @@ async def update_node(
     domain: str = Form(...),
     username: str = Form(...),
     password: str = Form(...),
+    upgraded: bool = Form(False),
     db: Session = Depends(get_db)
 ):
     """Update node"""
@@ -1384,6 +1394,7 @@ async def update_node(
     node.domain = domain
     node.username = username
     node.password = password
+    node.upgraded = upgraded
 
     db.commit()
     db.refresh(node)

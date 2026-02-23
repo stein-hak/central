@@ -564,6 +564,10 @@
                     <label data-i18n="password">Password</label>
                     <input type="password" id="editNodePassword" required>
                 </div>
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="editNodeUpgraded" style="width: auto; margin: 0;">
+                    <label for="editNodeUpgraded" style="margin: 0; cursor: pointer;">Upgraded (uses HAProxy with HA ports)</label>
+                </div>
                 <div class="modal-footer">
                     <button type="submit" class="btn btn-primary" data-i18n="btn_save">Save</button>
                     <button type="button" class="btn" onclick="closeEditNodeModal()" data-i18n="btn_cancel">Cancel</button>
@@ -1019,13 +1023,15 @@
                     trafficHtml = `<span style="color: #e74c3c;">-</span>`;
                 }
 
+                const upgradedBadge = node.upgraded ? `<br><span class="badge" style="background: #9b59b6; margin-top: 3px; font-size: 10px;">HA</span>` : '';
+
                 tr.innerHTML = `
                     <td>${node.name}</td>
                     <td>${node.url}</td>
                     <td>${node.domain}</td>
                     <td>${statsHtml}</td>
                     <td>${trafficHtml}</td>
-                    <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span></td>
+                    <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span>${upgradedBadge}</td>
                     <td>
                         <button class="btn btn-success" onclick="testNode(${node.id})">${translations[currentLang].btn_test}</button>
                         <button class="btn btn-primary" onclick="editNode(${node.id})">${translations[currentLang].btn_edit}</button>
@@ -1076,6 +1082,7 @@
             document.getElementById('editNodeDomain').value = node.domain;
             document.getElementById('editNodeUsername').value = node.username;
             document.getElementById('editNodePassword').value = node.password;
+            document.getElementById('editNodeUpgraded').checked = node.upgraded || false;
 
             document.getElementById('editNodeModal').classList.add('active');
         }
@@ -1095,6 +1102,7 @@
             formData.append('domain', document.getElementById('editNodeDomain').value);
             formData.append('username', document.getElementById('editNodeUsername').value);
             formData.append('password', document.getElementById('editNodePassword').value);
+            formData.append('upgraded', document.getElementById('editNodeUpgraded').checked);
 
             await fetch(`/api/nodes/${id}`, {
                 method: 'PUT',

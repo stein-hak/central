@@ -32,6 +32,7 @@ class Node(Base):
     username = Column(String(255), nullable=False)
     password = Column(String(255), nullable=False)
     enabled = Column(Boolean, default=True)
+    upgraded = Column(Boolean, default=False)  # True if node has synced clients (uses HA ports)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     keys = relationship("Key", back_populates="node", cascade="all, delete-orphan")
