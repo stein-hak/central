@@ -377,7 +377,7 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
 # Async Node Operations (Parallel)
 # ============================================================================
 
-async def async_create_keys_on_node(node: Node, client_email: str, db: Session) -> dict:
+async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: str, db: Session) -> dict:
     """
     Create keys for a client on a single node (async version).
     Returns: dict with node info, success status, keys created, and any errors
@@ -431,8 +431,8 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
             update_tasks = []
 
             for idx, inbound in enumerate(vless_inbounds):
-                # Generate UUID for this key
-                key_uuid = uuid.uuid4()
+                # Use the shared UUID for all inbounds (same client, same UUID everywhere)
+                key_uuid = client_uuid
 
                 # Create unique email per inbound using _0, _1, _2 suffix
                 full_email = f"{client_email}_{idx}"
@@ -529,12 +529,16 @@ async def async_create_keys_on_node(node: Node, client_email: str, db: Session) 
 async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session) -> List[dict]:
     """
     Create keys for a client on all nodes in parallel.
+    Generates ONE UUID for the client to use across ALL nodes and inbounds.
     Returns: List of results from each node
     """
     start_time = time.time()
-    print(f"\n🚀 Creating keys for '{client_email}' on {len(nodes)} nodes IN PARALLEL...")
 
-    tasks = [async_create_keys_on_node(node, client_email, db) for node in nodes]
+    # Generate ONE UUID for this client (shared across all nodes and inbounds)
+    client_uuid = str(uuid.uuid4())
+    print(f"\n🚀 Creating keys for '{client_email}' (UUID: {client_uuid[:8]}...) on {len(nodes)} nodes IN PARALLEL...")
+
+    tasks = [async_create_keys_on_node(node, client_email, client_uuid, db) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Convert exceptions to error results
@@ -3058,10 +3062,15 @@ async def create_users_batch(request: Request, db: Session = Depends(get_db)):
 
     all_tasks = []
     task_metadata = []  # Track which task belongs to which user/node
+    client_uuid_map = {}  # Track UUID for each client
 
     for client_email in user_client_map.keys():
+        # Generate ONE UUID per client (shared across all nodes and inbounds)
+        client_uuid = str(uuid.uuid4())
+        client_uuid_map[client_email] = client_uuid
+
         for node in nodes:
-            all_tasks.append(async_create_keys_on_node(node, client_email, db))
+            all_tasks.append(async_create_keys_on_node(node, client_email, client_uuid, db))
             task_metadata.append({
                 "client_email": client_email,
                 "node_id": node.id,
