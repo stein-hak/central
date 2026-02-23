@@ -1150,7 +1150,7 @@ async def get_nodes(request: Request, db: Session = Depends(get_db)):
     """Get all nodes"""
     check_auth(request)
     nodes = db.query(Node).all()
-    return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled} for n in nodes]
+    return [{"id": n.id, "name": n.name, "url": n.url, "domain": n.domain, "enabled": n.enabled, "upgraded": n.upgraded} for n in nodes]
 
 
 @app.get("/api/nodes/stats/all")
@@ -1302,7 +1302,8 @@ async def get_node(request: Request, node_id: int, db: Session = Depends(get_db)
         "domain": node.domain,
         "username": node.username,
         "password": node.password,
-        "enabled": node.enabled
+        "enabled": node.enabled,
+        "upgraded": node.upgraded
     }
 
 
