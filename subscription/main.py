@@ -297,8 +297,15 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     # Add routing rules for specific users (v2rayTUN support)
     if client_email in ["stein", "Client-40337230"]:
         # V2Ray routing object: bypass VPN for specific domains and geosite
+        # Format matches v2rayTUN documentation for iOS/Android compatibility
+        import json
+        import uuid
+
         routing_config = {
             "domainStrategy": "AsIs",
+            "id": str(uuid.uuid4()).upper(),
+            "balancers": [],
+            "domainMatcher": "hybrid",
             "rules": [
                 {
                     "type": "field",
@@ -306,19 +313,21 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
                         "domain:get-myip.com",
                         "domain:www.get-myip.com"
                     ],
-                    "outboundTag": "direct"
+                    "outboundTag": "direct",
+                    "id": str(uuid.uuid4()).upper()
                 },
                 {
                     "type": "field",
                     "domain": [
                         "geosite:category-ru"
                     ],
-                    "outboundTag": "direct"
+                    "outboundTag": "direct",
+                    "id": str(uuid.uuid4()).upper()
                 }
-            ]
+            ],
+            "name": "Direct Russia"
         }
         # Base64 encode routing config and add to headers
-        import json
         routing_json = json.dumps(routing_config, separators=(',', ':'))
         routing_encoded = base64.b64encode(routing_json.encode()).decode()
         headers["routing"] = routing_encoded
