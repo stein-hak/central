@@ -294,6 +294,28 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         "content-disposition": f'attachment; filename="{client_email}.txt"'
     }
 
+    # Add routing rules for specific users (v2rayTUN support)
+    if client_email == "stein":
+        # V2Ray routing object: bypass VPN for get-myip.com (test domain)
+        routing_config = {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {
+                    "type": "field",
+                    "domain": [
+                        "domain:get-myip.com",
+                        "domain:www.get-myip.com"
+                    ],
+                    "outboundTag": "direct"
+                }
+            ]
+        }
+        # Base64 encode routing config and add to headers
+        import json
+        routing_json = json.dumps(routing_config, separators=(',', ':'))
+        routing_encoded = base64.b64encode(routing_json.encode()).decode()
+        headers["routing"] = routing_encoded
+
     return Response(content=encoded, media_type="text/plain", headers=headers)
 
 
