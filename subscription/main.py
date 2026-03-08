@@ -296,7 +296,7 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
 
     # Add routing rules for specific users (v2rayTUN support)
     if client_email == "stein":
-        # V2Ray routing object: bypass VPN for get-myip.com (test domain)
+        # V2Ray routing object: bypass VPN for specific domains and geoip
         routing_config = {
             "domainStrategy": "AsIs",
             "rules": [
@@ -305,6 +305,13 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
                     "domain": [
                         "domain:get-myip.com",
                         "domain:www.get-myip.com"
+                    ],
+                    "outboundTag": "direct"
+                },
+                {
+                    "type": "field",
+                    "ip": [
+                        "geoip:ru"
                     ],
                     "outboundTag": "direct"
                 }
