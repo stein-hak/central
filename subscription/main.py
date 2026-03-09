@@ -307,39 +307,89 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         "content-disposition": f'attachment; filename="{client_email}.txt"'
     }
 
-    # Add routing rules for specific users (v2rayTUN support)
+    # Add routing rules for specific test users (client-aware routing)
     if client_email in ["stein", "Client-40337230"]:
-        # V2Ray routing object: bypass VPN for specific domains and geosite
-        # Format matches v2rayTUN documentation for iOS/Android compatibility
         import json
         import uuid
 
-        routing_config = {
-            "domainStrategy": "AsIs",
-            "id": str(uuid.uuid4()).upper(),
-            "balancers": [],
-            "domainMatcher": "hybrid",
-            "rules": [
-                {
-                    "type": "field",
-                    "domain": [
-                        "domain:get-myip.com",
-                        "domain:www.get-myip.com"
-                    ],
-                    "outboundTag": "direct",
-                    "id": str(uuid.uuid4()).upper()
-                },
-                {
-                    "type": "field",
-                    "domain": [
-                        "geosite:category-ru"
-                    ],
-                    "outboundTag": "direct",
-                    "id": str(uuid.uuid4()).upper()
-                }
-            ],
-            "name": "Direct Russia"
-        }
+        # Detect client type from User-Agent
+        is_happ_client = "Happ/" in user_agent
+        is_v2raytun_client = "v2raytun/" in user_agent.lower()
+
+        if is_happ_client:
+            # Happ client format: DirectSites/DirectIp with geosite support
+            logger.info(f"Client {client_email}: Detected Happ, sending DirectSites routing")
+            routing_config = {
+                "DirectSites": [
+                    "domain:get-myip.com",
+                    "domain:www.get-myip.com",
+                    "geosite:category-ru"
+                ],
+                "DirectIp": [
+                    "geoip:ru"
+                ],
+                "ProxySites": [],
+                "BlockSites": []
+            }
+        elif is_v2raytun_client:
+            # v2rayTUN format: V2Ray routing object with all required fields
+            logger.info(f"Client {client_email}: Detected v2rayTUN, sending V2Ray routing")
+            routing_config = {
+                "domainStrategy": "AsIs",
+                "id": str(uuid.uuid4()).upper(),
+                "balancers": [],
+                "domainMatcher": "hybrid",
+                "rules": [
+                    {
+                        "type": "field",
+                        "domain": [
+                            "domain:get-myip.com",
+                            "domain:www.get-myip.com"
+                        ],
+                        "outboundTag": "direct",
+                        "id": str(uuid.uuid4()).upper()
+                    },
+                    {
+                        "type": "field",
+                        "domain": [
+                            "geosite:category-ru"
+                        ],
+                        "outboundTag": "direct",
+                        "id": str(uuid.uuid4()).upper()
+                    }
+                ],
+                "name": "Direct Russia"
+            }
+        else:
+            # Unknown client - default to v2rayTUN format (widely compatible)
+            logger.info(f"Client {client_email}: Unknown client type ({user_agent}), defaulting to v2rayTUN routing")
+            routing_config = {
+                "domainStrategy": "AsIs",
+                "id": str(uuid.uuid4()).upper(),
+                "balancers": [],
+                "domainMatcher": "hybrid",
+                "rules": [
+                    {
+                        "type": "field",
+                        "domain": [
+                            "domain:get-myip.com",
+                            "domain:www.get-myip.com"
+                        ],
+                        "outboundTag": "direct",
+                        "id": str(uuid.uuid4()).upper()
+                    },
+                    {
+                        "type": "field",
+                        "domain": [
+                            "geosite:category-ru"
+                        ],
+                        "outboundTag": "direct",
+                        "id": str(uuid.uuid4()).upper()
+                    }
+                ],
+                "name": "Direct Russia"
+            }
+
         # Base64 encode routing config and add to headers
         routing_json = json.dumps(routing_config, separators=(',', ':'))
         routing_encoded = base64.b64encode(routing_json.encode()).decode()
