@@ -318,11 +318,12 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
 
         if is_happ_client:
             # Happ client format: DirectSites/DirectIp with geosite support
+            # Plain domains without "domain:" prefix, geosite/geoip with prefix
             logger.info(f"Client {client_email}: Detected Happ, sending DirectSites routing")
             routing_config = {
                 "DirectSites": [
-                    "domain:get-myip.com",
-                    "domain:www.get-myip.com",
+                    "get-myip.com",
+                    "www.get-myip.com",
                     "geosite:category-ru"
                 ],
                 "DirectIp": [
