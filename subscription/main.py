@@ -1,5 +1,6 @@
 """Subscription service - public read-only endpoint"""
 import base64
+import logging
 import os
 import random
 import re
@@ -8,6 +9,13 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from database import get_db, Client, Key
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Subscription Service")
 
@@ -178,6 +186,11 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     Get subscription for client
     Returns base64 encoded VLESS URLs (one per line) with auto-update headers
     """
+    # Log User-Agent for client behavior analysis
+    user_agent = request.headers.get("User-Agent", "Unknown")
+    client_ip = request.client.host if request.client else "Unknown"
+    logger.info(f"Subscription request - Client: {client_email}, IP: {client_ip}, User-Agent: {user_agent}")
+
     # Find client
     client = db.query(Client).filter(Client.email == client_email).first()
 
