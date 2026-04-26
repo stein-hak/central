@@ -357,6 +357,13 @@
                         <input type="text" name="email" required placeholder="user@example.com">
                     </div>
                     <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" name="reality_only" value="true" style="cursor: pointer;">
+                            <span data-i18n="reality_only">Reality-only (gRPC+Reality)</span>
+                        </label>
+                        <small style="color: #7f8c8d; display: block; margin-top: 5px; margin-left: 28px;" data-i18n="reality_only_help">Generate keys only on Reality inbounds. Unchecked: legacy non-Reality (gRPC+TLS, XHTTP)</small>
+                    </div>
+                    <div class="form-group">
                         <label data-i18n="manual_keys">Manual VLESS Keys (Optional)</label>
                         <textarea name="manual_keys" rows="4" placeholder="vless://uuid@domain:port?...&#10;vless://uuid@domain:port?...&#10;(One key per line)" style="font-family: monospace; font-size: 12px;"></textarea>
                         <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="manual_keys_help">Optional: Add custom VLESS URLs (one per line). These won't be deleted when nodes are removed.</small>
@@ -706,6 +713,8 @@
                 th_actions: 'Actions',
                 add_client: 'Add New Client',
                 email: 'Email',
+                reality_only: 'Reality-only (gRPC+Reality)',
+                reality_only_help: 'Generate keys only on Reality inbounds. Unchecked: legacy non-Reality (gRPC+TLS, XHTTP)',
                 manual_keys: 'Manual VLESS Keys (Optional)',
                 manual_keys_help: 'Optional: Add custom VLESS URLs (one per line). These won\'t be deleted when nodes are removed.',
                 btn_add_client: 'Add Client',
@@ -826,6 +835,8 @@
                 th_actions: 'Действия',
                 add_client: 'Добавить нового клиента',
                 email: 'Email',
+                reality_only: 'Только Reality (gRPC+Reality)',
+                reality_only_help: 'Создавать ключи только на Reality inbound. Без галочки: legacy не-Reality (gRPC+TLS, XHTTP)',
                 manual_keys: 'Ручные VLESS ключи (необязательно)',
                 manual_keys_help: 'Необязательно: Добавьте пользовательские VLESS URL (один на строку). Они не будут удалены при удалении узлов.',
                 btn_add_client: 'Добавить клиента',

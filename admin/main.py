@@ -447,13 +447,22 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
 # Async Node Operations (Parallel)
 # ============================================================================
 
-async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: str, db: Session) -> dict:
+async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: str, db: Session, reality_only: bool = False) -> dict:
     """
     Create keys for a client on a single node (async version).
+
+    Args:
+        node: Node to create keys on
+        client_email: Client email
+        client_uuid: Client UUID (shared across all inbounds)
+        db: Database session
+        reality_only: If True, only create keys on Reality inbounds. If False (default), create on legacy non-Reality inbounds only (gRPC+TLS, XHTTP)
+
     Returns: dict with node info, success status, keys created, and any errors
     """
     start_time = time.time()
-    print(f"  ⏱️  [{node.name}] Starting key creation...")
+    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    print(f"  ⏱️  [{node.name}] Starting key creation{filter_msg}...")
 
     result = {
         "node_id": node.id,
@@ -493,8 +502,29 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
             # Find ALL VLESS inbounds
             vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
+            # Filter by inbound type based on reality_only flag
+            filtered_inbounds = []
+            for inbound in vless_inbounds:
+                try:
+                    stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                    is_reality = stream_settings.get("security") == "reality"
+
+                    # If reality_only=True, only include Reality inbounds
+                    # If reality_only=False, only include non-Reality inbounds (legacy TLS/none)
+                    if reality_only and is_reality:
+                        filtered_inbounds.append(inbound)
+                    elif not reality_only and not is_reality:
+                        filtered_inbounds.append(inbound)
+                except:
+                    # If can't parse stream settings, treat as legacy (non-Reality)
+                    if not reality_only:
+                        filtered_inbounds.append(inbound)
+
+            vless_inbounds = filtered_inbounds
+
             if not vless_inbounds:
-                result["errors"].append("No VLESS inbounds found")
+                error_msg = "No Reality VLESS inbounds found" if reality_only else "No legacy VLESS inbounds found"
+                result["errors"].append(error_msg)
                 return result
 
             # Prepare all inbound updates in parallel
@@ -605,19 +635,27 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
     return result
 
 
-async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session) -> List[dict]:
+async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session, reality_only: bool = False) -> List[dict]:
     """
     Create keys for a client on all nodes in parallel.
     Generates ONE UUID for the client to use across ALL nodes and inbounds.
+
+    Args:
+        nodes: List of nodes to create keys on
+        client_email: Client email
+        db: Database session
+        reality_only: If True, only create keys on Reality inbounds. If False (default), create on legacy non-Reality inbounds only
+
     Returns: List of results from each node
     """
     start_time = time.time()
 
     # Generate ONE UUID for this client (shared across all nodes and inbounds)
     client_uuid = str(uuid.uuid4())
-    print(f"\n🚀 Creating keys for '{client_email}' (UUID: {client_uuid[:8]}...) on {len(nodes)} nodes IN PARALLEL...")
+    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    print(f"\n🚀 Creating keys for '{client_email}' (UUID: {client_uuid[:8]}...) on {len(nodes)} nodes IN PARALLEL{filter_msg}...")
 
-    tasks = [async_create_keys_on_node(node, client_email, client_uuid, db) for node in nodes]
+    tasks = [async_create_keys_on_node(node, client_email, client_uuid, db, reality_only) for node in nodes]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Convert exceptions to error results
@@ -1689,9 +1727,16 @@ async def create_client(
     request: Request,
     email: str = Form(...),
     manual_keys: str = Form(default=""),
+    reality_only: bool = Form(default=False),
     db: Session = Depends(get_db)
 ):
-    """Create new client and sync to all nodes"""
+    """Create new client and sync to all nodes
+
+    Args:
+        email: Client email
+        manual_keys: Optional manual VLESS URLs (newline separated)
+        reality_only: If True, create keys only on Reality inbounds. If False (default), create on legacy non-Reality inbounds
+    """
     check_auth(request)
 
     # Check if exists
@@ -1712,8 +1757,8 @@ async def create_client(
     nodes = db.query(Node).filter(Node.enabled == True).all()
 
     if nodes:
-        # Use async parallel key creation
-        node_results = await async_create_keys_on_all_nodes(nodes, email, db)
+        # Use async parallel key creation with reality_only flag
+        node_results = await async_create_keys_on_all_nodes(nodes, email, db, reality_only=reality_only)
 
         # Save keys to database
         for result in node_results:
