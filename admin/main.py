@@ -90,8 +90,8 @@ def clear_node_stats_cache(node_id: int):
 # 3x-ui API Integration
 # ============================================================================
 
-def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc") -> str:
-    """Generate VLESS URL for client
+def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc", stream_settings: dict = None) -> str:
+    """Generate VLESS URL for client (supports both TLS and Reality)
 
     Args:
         node: Node configuration
@@ -99,6 +99,7 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
         client_uuid: Client UUID
         inbound_id: Inbound ID (unused, kept for compatibility)
         transport: Transport type ('grpc' or 'xhttp')
+        stream_settings: Optional stream settings dict from inbound (for Reality support)
 
     Returns:
         VLESS URL string
@@ -116,26 +117,76 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
         # Legacy nodes: use main domain with nginx
         domain = node.domain
 
+    # Detect security type from stream settings
+    # Default to "tls" for non-Reality transports
+    security = "tls"
+    if stream_settings:
+        detected_security = stream_settings.get("security", "tls")
+        # Only override to Reality if explicitly configured
+        if detected_security == "reality":
+            security = "reality"
+        # Otherwise keep as "tls"
+
     if transport == "xhttp":
         # XHTTP transport: type=xhttp, path=/api
         params = {
             "encryption": "none",
-            "security": "tls",
+            "security": security,
             "type": "xhttp",
             "path": "/api"
         }
         remark = urllib.parse.quote(f"{node.name}-XHTTP-{client_email}")
     else:
-        # gRPC transport: type=grpc, serviceName=sync (default)
+        # gRPC transport: type=grpc, serviceName from settings or default
+        grpc_settings = stream_settings.get("grpcSettings", {}) if stream_settings else {}
+        service_name = grpc_settings.get("serviceName", "sync")
+        authority = grpc_settings.get("authority", "")
+
         params = {
-            "encryption": "none",
-            "security": "tls",
             "type": "grpc",
-            "serviceName": "sync"
+            "encryption": "none",
+            "serviceName": service_name,
+            "authority": authority,
+            "security": security
         }
         remark = urllib.parse.quote(f"{node.name}-gRPC-{client_email}")
 
-    query_string = urllib.parse.urlencode(params)
+    # Add Reality-specific parameters if using Reality
+    if security == "reality" and stream_settings:
+        reality_settings = stream_settings.get("realitySettings", {})
+
+        # Extract Reality parameters
+        public_key = reality_settings.get("settings", {}).get("publicKey", "")
+        fingerprint = reality_settings.get("settings", {}).get("fingerprint", "chrome")
+        spider_x = reality_settings.get("settings", {}).get("spiderX", "/")
+
+        # Server names (SNI)
+        server_names = reality_settings.get("serverNames", [])
+        sni = server_names[0] if server_names else domain
+
+        # Short IDs
+        short_ids = reality_settings.get("shortIds", [])
+        short_id = short_ids[0] if short_ids else ""
+
+        # Add Reality params to URL
+        params["pbk"] = public_key
+        params["fp"] = fingerprint
+        params["sni"] = sni
+        params["sid"] = short_id
+        params["spx"] = spider_x
+
+    # Build query string (order matters for some clients)
+    if security == "reality":
+        # Reality: specific order for compatibility
+        query_parts = []
+        for key in ["type", "encryption", "serviceName", "authority", "security", "pbk", "fp", "sni", "sid", "spx"]:
+            if key in params and params[key]:
+                query_parts.append(f"{key}={urllib.parse.quote(str(params[key]))}")
+        query_string = "&".join(query_parts)
+    else:
+        # TLS: standard encoding
+        query_string = urllib.parse.urlencode(params)
+
     vless_url = f"vless://{client_uuid}@{domain}:443?{query_string}#{remark}"
 
     return vless_url
@@ -239,15 +290,25 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
                 print(f"   Warning: Failed to add client to {inbound_remark}: {add_response.status_code}")
                 continue
 
+            # Parse stream settings for Reality support
+            stream_settings = None
+            if vless_inbound.get("streamSettings"):
+                try:
+                    stream_settings = json.loads(vless_inbound["streamSettings"])
+                except:
+                    stream_settings = None
+
             # Determine transport type from inbound remark or streamSettings
             transport = "grpc"  # default
-            if "xhttp" in inbound_remark.lower():
+            if stream_settings:
+                transport = stream_settings.get("network", "grpc")
+            elif "xhttp" in inbound_remark.lower():
                 transport = "xhttp"
             elif "tcp" in inbound_remark.lower():
                 transport = "tcp"
 
-            # Generate VLESS URL
-            vless_url = create_vless_url(node, client.email, str(client_uuid), inbound_id, transport=transport)
+            # Generate VLESS URL (with Reality support if present in stream_settings)
+            vless_url = create_vless_url(node, client.email, str(client_uuid), inbound_id, transport=transport, stream_settings=stream_settings)
 
             # Save first URL for return value
             if first_vless_url is None:
@@ -492,6 +553,13 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                     "sniffing": inbound["sniffing"]
                 }
 
+                # Parse stream settings for Reality support
+                stream_settings_dict = None
+                try:
+                    stream_settings_dict = json.loads(inbound["streamSettings"]) if inbound.get("streamSettings") else None
+                except:
+                    stream_settings_dict = None
+
                 # Create update task (will execute in parallel)
                 update_tasks.append({
                     "task": client.post(
@@ -502,7 +570,8 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                     "uuid": str(key_uuid),
                     "transport": transport.upper(),
                     "email": full_email,
-                    "inbound_id": inbound["id"]
+                    "inbound_id": inbound["id"],
+                    "stream_settings": stream_settings_dict
                 })
 
             # Execute all inbound updates in parallel
@@ -518,7 +587,8 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                             "uuid": task_info["uuid"],
                             "transport": task_info["transport"],
                             "email": task_info["email"],
-                            "inbound_id": task_info["inbound_id"]
+                            "inbound_id": task_info["inbound_id"],
+                            "stream_settings": task_info.get("stream_settings")
                         })
                     else:
                         result["errors"].append(f"{task_info['transport']} update failed: {response.status_code}")
@@ -1659,7 +1729,8 @@ async def create_client(
                             email,
                             key_info["uuid"],
                             key_info["inbound_id"],
-                            key_info["transport"].lower()
+                            key_info["transport"].lower(),
+                            stream_settings=key_info.get("stream_settings")
                         ),
                         manual=False,
                         created_at=datetime.utcnow()
@@ -1786,7 +1857,8 @@ async def batch_create_clients(
                                 email,
                                 key_info["uuid"],
                                 key_info["inbound_id"],
-                                key_info["transport"].lower()
+                                key_info["transport"].lower(),
+                                stream_settings=key_info.get("stream_settings")
                             ),
                             manual=False,
                             created_at=datetime.utcnow()
@@ -2910,7 +2982,8 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
                         client_email,
                         key_info["uuid"],
                         key_info["inbound_id"],
-                        key_info["transport"].lower()
+                        key_info["transport"].lower(),
+                        stream_settings=key_info.get("stream_settings")
                     ),
                     manual=False,
                     created_at=datetime.utcnow()
@@ -3125,7 +3198,8 @@ async def create_users_batch(request: Request, db: Session = Depends(get_db)):
                         metadata["client_email"],
                         key_info["uuid"],
                         key_info["inbound_id"],
-                        key_info["transport"].lower()
+                        key_info["transport"].lower(),
+                        stream_settings=key_info.get("stream_settings")
                     ),
                     manual=False,
                     created_at=datetime.utcnow()
