@@ -1849,9 +1849,16 @@ async def batch_create_clients(
     request: Request,
     seed: str = Form(...),
     count: int = Form(...),
+    reality_only: bool = Form(default=False),
     db: Session = Depends(get_db)
 ):
-    """Batch create clients with pattern: seed0, seed1, ..., seed(count-1)"""
+    """Batch create clients with pattern: seed-{random_hex}
+
+    Args:
+        seed: Base name for clients (e.g., "client")
+        count: Number of clients to create (1-100)
+        reality_only: If True, create keys only on Reality inbounds. If False (default), create on legacy non-Reality inbounds
+    """
     check_auth(request)
 
     if count < 1 or count > 100:
@@ -1884,9 +1891,9 @@ async def batch_create_clients(
         db.commit()
         db.refresh(client)
 
-        # Sync to all enabled nodes IN PARALLEL
+        # Sync to all enabled nodes IN PARALLEL with reality_only flag
         if nodes:
-            node_results = await async_create_keys_on_all_nodes(nodes, email, db)
+            node_results = await async_create_keys_on_all_nodes(nodes, email, db, reality_only=reality_only)
 
             # Save keys to database
             for result in node_results:
@@ -2518,12 +2525,17 @@ async def add_manual_keys(
 async def recreate_client_on_nodes(
     request: Request,
     client_id: int,
+    reality_only: bool = Form(default=None),
     db: Session = Depends(get_db)
 ):
     """
     Recreate client on ALL nodes (fixes broken flow settings)
     - Deletes client from all inbounds on all nodes (gRPC, XHTTP, etc.)
     - Recreates client with same UUID on all nodes
+
+    Args:
+        client_id: Client ID to recreate
+        reality_only: If specified, override inbound type. If None (default), auto-detect from existing keys
     """
     check_auth(request)
 
@@ -2549,35 +2561,62 @@ async def recreate_client_on_nodes(
         # Generate new UUID if no keys exist
         client_uuid = str(uuid.uuid4())
 
-    results = []
+    # Auto-detect reality_only from existing keys if not specified
+    if reality_only is None:
+        # Check if existing keys have Reality (security=reality in URL)
+        if existing_key and existing_key.vless_url:
+            reality_only = "security=reality" in existing_key.vless_url
+        else:
+            # Default to legacy (non-Reality) if no existing keys
+            reality_only = False
 
-    # Recreate on ALL nodes
-    for node in nodes:
-        try:
-            # Use sync_client_to_node which handles:
-            # - Deletion from all inbounds (gRPC, XHTTP)
-            # - Recreation with correct flow settings
-            # - Saving keys to database
-            success, message = sync_client_to_node(node, client, client_uuid, db)
+    # Delete all existing auto-generated keys for this client
+    db.query(Key).filter(
+        Key.client_id == client_id,
+        Key.manual == False
+    ).delete()
+    db.commit()
 
-            results.append({
-                "node": node.name,
-                "success": success,
-                "message": message if success else f"Error: {message}"
-            })
+    # Recreate keys on ALL nodes using async parallel method
+    node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=reality_only)
 
-        except Exception as e:
-            results.append({
-                "node": node.name,
-                "success": False,
-                "message": f"Exception: {str(e)}"
-            })
+    # Save keys to database
+    for result in node_results:
+        if result["success"]:
+            for key_info in result["keys"]:
+                key = Key(
+                    client_id=client.id,
+                    node_id=result["node_id"],
+                    inbound_id=key_info["inbound_id"],
+                    uuid=key_info["uuid"],
+                    vless_url=create_vless_url(
+                        db.query(Node).get(result["node_id"]),
+                        client.email,
+                        key_info["uuid"],
+                        key_info["inbound_id"],
+                        key_info["transport"].lower(),
+                        stream_settings=key_info.get("stream_settings")
+                    ),
+                    manual=False,
+                    created_at=datetime.utcnow()
+                )
+                db.add(key)
 
-    success_count = sum(1 for r in results if r["success"])
+    db.commit()
+
+    # Format results for response
+    results = [{
+        "node": r["node_name"],
+        "success": r["success"],
+        "message": f"Created {len(r['keys'])} keys" if r["success"] else ", ".join(r["errors"])
+    } for r in node_results]
+
+    success_count = sum(1 for r in node_results if r["success"])
 
     return {
         "client_email": client.email,
         "client_uuid": client_uuid,
+        "reality_only": reality_only,
         "total_nodes": len(results),
         "success_count": success_count,
         "results": results
@@ -3089,13 +3128,15 @@ async def create_users_batch(request: Request, db: Session = Depends(get_db)):
                 "renewal_date": "2025-02-01"
             },
             ...
-        ]
+        ],
+        "reality_only": false  // Optional: default false (legacy non-Reality inbounds)
     }
     """
     check_auth(request)
 
     data = await request.json()
     users_data = data.get("users", [])
+    reality_only = data.get("reality_only", False)  # Default to legacy non-Reality
 
     if not users_data:
         raise HTTPException(status_code=400, detail="No users provided")
@@ -3205,7 +3246,7 @@ async def create_users_batch(request: Request, db: Session = Depends(get_db)):
         client_uuid_map[client_email] = client_uuid
 
         for node in nodes:
-            all_tasks.append(async_create_keys_on_node(node, client_email, client_uuid, db))
+            all_tasks.append(async_create_keys_on_node(node, client_email, client_uuid, db, reality_only=reality_only))
             task_metadata.append({
                 "client_email": client_email,
                 "node_id": node.id,
