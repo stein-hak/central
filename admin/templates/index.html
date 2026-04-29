@@ -383,6 +383,13 @@
                         <label data-i18n="client_count">Count</label>
                         <input type="number" name="count" required min="1" max="100" placeholder="20" value="20">
                     </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" name="reality_only" value="true" style="cursor: pointer;">
+                            <span data-i18n="reality_only">Reality-only (gRPC+Reality)</span>
+                        </label>
+                        <small style="color: #7f8c8d; display: block; margin-top: 5px; margin-left: 28px;" data-i18n="reality_only_help">Generate keys only on Reality inbounds. Unchecked: legacy non-Reality (gRPC+TLS, XHTTP)</small>
+                    </div>
                     <p style="color: #7f8c8d; font-size: 13px;" data-i18n="batch_example">Example: "client" + 20 = client-a3f9b2e1, client-7d2c8f4a, ... (random)</p>
                     <button type="submit" class="btn btn-primary" data-i18n="btn_batch_create">Batch Create</button>
                 </form>
@@ -1408,13 +1415,37 @@
 
         // Recreate client on all nodes
         async function recreateClient(id, email) {
-            if (!confirm(`Recreate client "${email}" on all nodes?\n\nThis will delete and recreate the client with correct flow settings (fixes broken XTLS flow).`)) {
-                return;
+            // Ask user which type of inbounds to use
+            const inboundType = prompt(
+                `Recreate client "${email}" on all nodes?\n\n` +
+                `Choose inbound type:\n` +
+                `- Type "reality" for Reality-only (gRPC+Reality)\n` +
+                `- Type "legacy" for legacy non-Reality (gRPC+TLS, XHTTP)\n` +
+                `- Leave empty to auto-detect from existing keys\n\n` +
+                `Enter: reality / legacy / [empty for auto]`
+            );
+
+            if (inboundType === null) {
+                return; // User clicked Cancel
             }
 
+            let realityOnly = null;
+            if (inboundType.toLowerCase() === 'reality') {
+                realityOnly = true;
+            } else if (inboundType.toLowerCase() === 'legacy') {
+                realityOnly = false;
+            }
+            // else: null = auto-detect
+
             try {
+                const formData = new FormData();
+                if (realityOnly !== null) {
+                    formData.append('reality_only', realityOnly);
+                }
+
                 const response = await fetch(`/api/clients/${id}/recreate`, {
-                    method: 'POST'
+                    method: 'POST',
+                    body: formData
                 });
 
                 if (response.ok) {
