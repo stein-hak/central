@@ -86,6 +86,32 @@ class Key(Base):
     node = relationship("Node", back_populates="keys")
 
 
+class Domain(Base):
+    """Public domains for VLESS URLs"""
+    __tablename__ = "domains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(255), unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NodeDomain(Base):
+    """Many-to-many: nodes can serve multiple domains"""
+    __tablename__ = "node_domains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    node_id = Column(Integer, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
+    domain_id = Column(Integer, ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
+    is_primary = Column(Boolean, default=False)
+    enabled = Column(Boolean, default=True)
+    display_name = Column(String(100))  # Override node name to appear as different server
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    domain = relationship("Domain")
+    node = relationship("Node")
+
+
 def get_db():
     """Dependency to get database session"""
     db = SessionLocal()

@@ -42,9 +42,34 @@ class Key(Base):
     client_id = Column(Integer, ForeignKey("clients.id"))
     node_id = Column(Integer, ForeignKey("nodes.id"))
     vless_url = Column(Text, nullable=False)
+    uuid = Column(UUID(as_uuid=True))  # Client UUID for URL regeneration
 
     client = relationship("Client", back_populates="keys")
     node = relationship("Node", back_populates="keys")
+
+
+class Domain(Base):
+    """Public domains for VLESS URLs"""
+    __tablename__ = "domains"
+
+    id = Column(Integer, primary_key=True)
+    domain = Column(String(255), unique=True, nullable=False)
+    enabled = Column(Boolean, default=True)
+
+
+class NodeDomain(Base):
+    """Many-to-many: nodes can serve multiple domains"""
+    __tablename__ = "node_domains"
+
+    id = Column(Integer, primary_key=True)
+    node_id = Column(Integer, ForeignKey("nodes.id"))
+    domain_id = Column(Integer, ForeignKey("domains.id"))
+    is_primary = Column(Boolean, default=False)
+    enabled = Column(Boolean, default=True)
+    display_name = Column(String(100))  # Override node name (e.g., "node-france")
+
+    domain = relationship("Domain")
+    node = relationship("Node")
 
 
 def get_db():

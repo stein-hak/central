@@ -45,4 +45,4 @@ CREATE INDEX idx_keys_node_id ON keys(node_id);
 CREATE USER sub_readonly WITH PASSWORD 'sub_readonly_password';
 GRANT CONNECT ON DATABASE xui_central TO sub_readonly;
 GRANT USAGE ON SCHEMA public TO sub_readonly;
-GRANT SELECT ON clients, keys, nodes TO sub_readonly;
+GRANT SELECT ON clients, keys, nodes, domains, node_domains TO sub_readonly;

@@ -90,8 +90,8 @@ def clear_node_stats_cache(node_id: int):
 # 3x-ui API Integration
 # ============================================================================
 
-def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc", stream_settings: dict = None) -> str:
-    """Generate VLESS URL for client (supports both TLS and Reality)
+def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc", stream_settings: dict = None, domain_override: str = None, domain_label: str = None) -> str:
+    """Generate VLESS URL for client (supports both TLS and Reality, multi-domain)
 
     Args:
         node: Node configuration
@@ -100,22 +100,27 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
         inbound_id: Inbound ID (unused, kept for compatibility)
         transport: Transport type ('grpc' or 'xhttp')
         stream_settings: Optional stream settings dict from inbound (for Reality support)
+        domain_override: Override domain (for multi-domain support)
+        domain_label: Label for this domain (e.g., 'cdn', 'backup') - shows in server name
 
     Returns:
         VLESS URL string
     """
     import urllib.parse
 
+    # Use override domain or fallback to node.domain
+    base_domain = domain_override if domain_override else node.domain
+
     # Determine domain based on upgraded status and transport
     if node.upgraded:
         # Upgraded nodes: use subdomain for HAProxy SNI routing
         if transport == "xhttp":
-            domain = f"app.{node.domain}"  # app.domain -> xhttp-HA (20001)
+            domain = f"app.{base_domain}"  # app.domain -> xhttp-HA (20001)
         else:
-            domain = f"api.{node.domain}"  # api.domain -> grpc-HA (20000)
+            domain = f"api.{base_domain}"  # api.domain -> grpc-HA (20000)
     else:
         # Legacy nodes: use main domain with nginx
-        domain = node.domain
+        domain = base_domain
 
     # Detect security type from stream settings
     # Default to "tls" for non-Reality transports
@@ -135,7 +140,7 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
             "type": "xhttp",
             "path": "/api"
         }
-        remark = urllib.parse.quote(f"{node.name}-XHTTP-{client_email}")
+        protocol_label = "XHTTP"
     else:
         # gRPC transport: type=grpc, serviceName from settings or default
         grpc_settings = stream_settings.get("grpcSettings", {}) if stream_settings else {}
@@ -149,7 +154,16 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
             "authority": authority,
             "security": security
         }
-        remark = urllib.parse.quote(f"{node.name}-gRPC-{client_email}")
+        protocol_label = "gRPC"
+
+    # Build remark with domain label
+    # Format: node-name[-domain-label]-protocol-email
+    if domain_label and domain_label != "primary":
+        # Non-primary domain: add label to distinguish in subscription
+        remark = urllib.parse.quote(f"{node.name}-{domain_label}-{protocol_label}-{client_email}")
+    else:
+        # Primary domain: keep original format for backwards compatibility
+        remark = urllib.parse.quote(f"{node.name}-{protocol_label}-{client_email}")
 
     # Add Reality-specific parameters if using Reality
     if security == "reality" and stream_settings:
@@ -1674,6 +1688,182 @@ async def delete_node(request: Request, node_id: int, db: Session = Depends(get_
         "keys_removed": keys_deleted,
         "clients_deleted_on_node": clients_deleted_on_node
     }
+
+
+# ============================================================================
+# API Routes - Domains (Multi-Domain Support)
+# ============================================================================
+
+@app.get("/api/domains")
+async def get_domains(request: Request, db: Session = Depends(get_db)):
+    """Get all domains"""
+    check_auth(request)
+
+    from database import Domain
+    domains = db.query(Domain).order_by(Domain.domain).all()
+    return [{"id": d.id, "domain": d.domain, "enabled": d.enabled} for d in domains]
+
+
+@app.post("/api/domains")
+async def create_domain(request: Request, db: Session = Depends(get_db)):
+    """Create new domain"""
+    check_auth(request)
+
+    from database import Domain
+    form = await request.form()
+    domain_name = form.get("domain")
+
+    if not domain_name:
+        raise HTTPException(status_code=400, detail="Domain name required")
+
+    # Check if domain already exists
+    existing = db.query(Domain).filter(Domain.domain == domain_name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Domain already exists")
+
+    domain = Domain(domain=domain_name, enabled=True)
+    db.add(domain)
+    db.commit()
+    db.refresh(domain)
+
+    return {"id": domain.id, "domain": domain.domain, "enabled": domain.enabled}
+
+
+@app.get("/api/nodes/{node_id}/domains")
+async def get_node_domains(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Get all domains configured for a node"""
+    check_auth(request)
+
+    from database import Domain, NodeDomain
+
+    # Check node exists
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    # Get node-domain mappings
+    mappings = db.query(NodeDomain, Domain).join(
+        Domain, NodeDomain.domain_id == Domain.id
+    ).filter(
+        NodeDomain.node_id == node_id
+    ).order_by(NodeDomain.is_primary.desc(), Domain.domain).all()
+
+    result = []
+    for nd, domain in mappings:
+        result.append({
+            "id": nd.id,
+            "domain_id": domain.id,
+            "domain": domain.domain,
+            "is_primary": nd.is_primary,
+            "enabled": nd.enabled,
+            "display_name": nd.display_name
+        })
+
+    return result
+
+
+@app.post("/api/nodes/{node_id}/domains")
+async def add_domain_to_node(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Add domain to node"""
+    check_auth(request)
+
+    from database import Domain, NodeDomain
+
+    # Check node exists
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    form = await request.form()
+    domain_id = int(form.get("domain_id"))
+    display_name = form.get("display_name", "").strip() or None
+    is_primary = form.get("is_primary") == "true"
+
+    # Check domain exists
+    domain = db.query(Domain).filter(Domain.id == domain_id).first()
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+
+    # Check if mapping already exists
+    existing = db.query(NodeDomain).filter(
+        NodeDomain.node_id == node_id,
+        NodeDomain.domain_id == domain_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Domain already added to this node")
+
+    # Create mapping
+    node_domain = NodeDomain(
+        node_id=node_id,
+        domain_id=domain_id,
+        is_primary=is_primary,
+        enabled=True,
+        display_name=display_name
+    )
+    db.add(node_domain)
+    db.commit()
+    db.refresh(node_domain)
+
+    return {
+        "id": node_domain.id,
+        "domain_id": domain.id,
+        "domain": domain.domain,
+        "is_primary": node_domain.is_primary,
+        "enabled": node_domain.enabled,
+        "display_name": node_domain.display_name
+    }
+
+
+@app.put("/api/nodes/{node_id}/domains/{mapping_id}")
+async def update_node_domain(request: Request, node_id: int, mapping_id: int, db: Session = Depends(get_db)):
+    """Update node-domain mapping"""
+    check_auth(request)
+
+    from database import NodeDomain
+
+    mapping = db.query(NodeDomain).filter(
+        NodeDomain.id == mapping_id,
+        NodeDomain.node_id == node_id
+    ).first()
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+
+    form = await request.form()
+
+    if "display_name" in form:
+        mapping.display_name = form.get("display_name").strip() or None
+
+    if "enabled" in form:
+        mapping.enabled = form.get("enabled") == "true"
+
+    db.commit()
+    db.refresh(mapping)
+
+    return {"success": True}
+
+
+@app.delete("/api/nodes/{node_id}/domains/{mapping_id}")
+async def remove_domain_from_node(request: Request, node_id: int, mapping_id: int, db: Session = Depends(get_db)):
+    """Remove domain from node"""
+    check_auth(request)
+
+    from database import NodeDomain
+
+    mapping = db.query(NodeDomain).filter(
+        NodeDomain.id == mapping_id,
+        NodeDomain.node_id == node_id
+    ).first()
+    if not mapping:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+
+    # Don't allow deleting primary domain
+    if mapping.is_primary:
+        raise HTTPException(status_code=400, detail="Cannot delete primary domain mapping")
+
+    db.delete(mapping)
+    db.commit()
+
+    return {"success": True}
 
 
 # ============================================================================

@@ -4,11 +4,12 @@ import logging
 import os
 import random
 import re
+import urllib.parse
 from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from database import get_db, Client, Key
+from database import get_db, Client, Key, Node, Domain, NodeDomain
 
 # Configure logging
 logging.basicConfig(
@@ -21,109 +22,6 @@ app = FastAPI(title="Subscription Service")
 
 # Get profile title from environment
 PROFILE_TITLE = os.getenv("PROFILE_TITLE", "VPN Service")
-
-# Feature toggle: Enable device-aware fingerprint randomization
-# Set to "true" to enable, "false" to disable (default: false)
-ENABLE_FP_RANDOMIZATION = os.getenv("ENABLE_FP_RANDOMIZATION", "false").lower() == "true"
-
-
-def get_fingerprints_for_device(user_agent: str) -> tuple[list, list]:
-    """
-    Return (fingerprints, weights) appropriate for device type
-
-    Args:
-        user_agent: HTTP User-Agent header
-
-    Returns:
-        Tuple of (fingerprint_list, weights_list)
-    """
-    ua = user_agent.lower()
-
-    if 'iphone' in ua or 'ipad' in ua:
-        # iOS devices: prefer ios/safari, include chrome (iOS can run it), random as fallback
-        return (
-            ['ios', 'safari', 'chrome', 'random'],
-            [40, 30, 20, 10]
-        )
-
-    elif 'android' in ua:
-        # Android devices: prefer android/chrome, include firefox, random as fallback
-        return (
-            ['android', 'chrome', 'firefox', 'random'],
-            [35, 35, 20, 10]
-        )
-
-    else:
-        # Desktop or unknown: all desktop browsers + random
-        return (
-            ['chrome', 'firefox', 'edge', 'safari', 'random'],
-            [30, 25, 20, 15, 10]
-        )
-
-
-def get_random_fingerprint(user_agent: str = "") -> str:
-    """
-    Get device-appropriate random fingerprint
-
-    Args:
-        user_agent: HTTP User-Agent header (optional)
-
-    Returns:
-        TLS fingerprint string (chrome, firefox, safari, edge, ios, android, or random)
-    """
-    if not user_agent:
-        # No User-Agent: return 'random' to let Xray client decide
-        return 'random'
-
-    fingerprints, weights = get_fingerprints_for_device(user_agent)
-    return random.choices(fingerprints, weights=weights, k=1)[0]
-
-
-def add_or_replace_fingerprint(vless_url: str, user_agent: str = "") -> str:
-    """
-    Add or replace fp= parameter in VLESS URL with device-appropriate random fingerprint
-
-    Args:
-        vless_url: Original VLESS URL (may or may not have fp= already)
-        user_agent: HTTP User-Agent for device detection
-
-    Returns:
-        VLESS URL with randomized fp= parameter
-    """
-    # Get device-appropriate random fingerprint
-    fp = get_random_fingerprint(user_agent)
-
-    # Remove existing fp= if present (handles all positions)
-    vless_url = re.sub(r'&fp=[^&#]+', '', vless_url)           # &fp=xxx
-    vless_url = re.sub(r'\?fp=[^&#]+&', '?', vless_url)        # ?fp=xxx& (first param)
-    vless_url = re.sub(r'\?fp=[^&#]+#', '?#', vless_url)       # ?fp=xxx# (only param with remark)
-    vless_url = re.sub(r'\?fp=[^&#]+$', '', vless_url)         # ?fp=xxx (only param, no remark)
-
-    # Clean up double separators
-    vless_url = vless_url.replace('?&', '?')
-    vless_url = vless_url.replace('?#', '#')
-
-    # Add new random fp= parameter
-    if '?' in vless_url:
-        # Has query params - append to them
-        if '#' in vless_url:
-            # Has remark: insert before #
-            base, remark = vless_url.rsplit('#', 1)
-            vless_url = f"{base}&fp={fp}#{remark}"
-        else:
-            # No remark: append to end
-            vless_url = f"{vless_url}&fp={fp}"
-    else:
-        # No query params - add them
-        if '#' in vless_url:
-            # Has remark: insert before #
-            base, remark = vless_url.rsplit('#', 1)
-            vless_url = f"{base}?fp={fp}#{remark}"
-        else:
-            # No remark: append to end
-            vless_url = f"{vless_url}?fp={fp}"
-
-    return vless_url
 
 
 def add_standard_alpn(vless_url: str) -> str:
@@ -172,6 +70,85 @@ def add_standard_alpn(vless_url: str) -> str:
             vless_url = f"{vless_url}?alpn={alpn}"
 
     return vless_url
+
+
+def regenerate_url_with_domain(original_url: str, new_domain: str, node_upgraded: bool, display_name: str = None) -> str:
+    """
+    Regenerate VLESS URL with different domain (for multi-domain support).
+    Preserves ALL parameters including Reality params - only changes domain and node name.
+
+    Args:
+        original_url: Original VLESS URL
+        new_domain: New domain to use
+        node_upgraded: If True, adds subdomain prefix (api./app.)
+        display_name: Override node name to appear as different server (e.g., "node-france", "node-cloudflare")
+
+    Returns:
+        New URL with different domain and optionally different node name
+    """
+    if not original_url.startswith('vless://'):
+        return original_url
+
+    # Extract components: vless://UUID@DOMAIN:PORT?PARAMS#REMARK
+    try:
+        # Extract UUID
+        uuid = original_url.split('://')[1].split('@')[0]
+
+        # Extract query params and remark
+        after_at = original_url.split('@', 1)[1]
+
+        # Determine transport from params
+        transport = "grpc"
+        if 'type=xhttp' in original_url:
+            transport = "xhttp"
+
+        # Build new domain with subdomain if upgraded
+        if node_upgraded:
+            final_domain = f"{'app' if transport == 'xhttp' else 'api'}.{new_domain}"
+        else:
+            final_domain = new_domain
+
+        # Extract query string and old remark
+        if '?' in after_at:
+            query_and_remark = after_at.split('?', 1)[1]
+            if '#' in query_and_remark:
+                query_string, old_remark = query_and_remark.split('#', 1)
+            else:
+                query_string = query_and_remark
+                old_remark = ""
+        else:
+            query_string = ""
+            old_remark = after_at.split('#')[1] if '#' in after_at else ""
+
+        # Build new remark - replace node name if display_name provided
+        if display_name:
+            # Replace node name with display_name to appear as different server
+            # Old format: node-name-gRPC-email or node-name-XHTTP-email
+            # New format: display-name-gRPC-email or display-name-XHTTP-email
+            if '-gRPC-' in old_remark:
+                _, email_part = old_remark.split('-gRPC-', 1)
+                new_remark = f"{display_name}-gRPC-{email_part}"
+            elif '-XHTTP-' in old_remark:
+                _, email_part = old_remark.split('-XHTTP-', 1)
+                new_remark = f"{display_name}-XHTTP-{email_part}"
+            else:
+                new_remark = display_name
+        else:
+            # No display name - keep original remark
+            new_remark = old_remark
+
+        # Build new URL
+        new_url = f"vless://{uuid}@{final_domain}:443"
+        if query_string:
+            new_url += f"?{query_string}"
+        if new_remark:
+            new_url += f"#{new_remark}"
+
+        return new_url
+
+    except Exception as e:
+        logger.error(f"Failed to regenerate URL: {e}")
+        return original_url  # Return original if parsing fails
 
 
 @app.get("/health")
@@ -231,8 +208,38 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     # Get deduplicated keys
     keys = list(keys_by_node_transport.values())
 
+    # Generate multi-domain URLs for each key
+    # Check if nodes have multiple domains configured and generate additional URLs
+    all_vless_urls = []
+
+    for key in keys:
+        # Always include the primary URL (backwards compatible)
+        all_vless_urls.append(key.vless_url)
+
+        # Check if this node has additional domains configured
+        node_domains = db.query(NodeDomain, Domain, Node).join(
+            Domain, NodeDomain.domain_id == Domain.id
+        ).join(
+            Node, NodeDomain.node_id == Node.id
+        ).filter(
+            NodeDomain.node_id == key.node_id,
+            NodeDomain.enabled == True,
+            Domain.enabled == True,
+            NodeDomain.is_primary == False  # Only get non-primary domains
+        ).all()
+
+        # Generate URLs for additional domains
+        for nd, domain, node in node_domains:
+            additional_url = regenerate_url_with_domain(
+                original_url=key.vless_url,
+                new_domain=domain.domain,
+                node_upgraded=node.upgraded or False,
+                display_name=nd.display_name
+            )
+            all_vless_urls.append(additional_url)
+
     # Build subscription content (one URL per line)
-    # Group keys by country, XHTTP first within each group, then randomize groups
+    # Group URLs by country, XHTTP first within each group, then randomize groups
 
     # Extract remark from VLESS URL for grouping
     def get_remark_from_url(vless_url):
@@ -256,15 +263,15 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         """Check if URL is XHTTP transport"""
         return 'type=xhttp' in vless_url
 
-    # Group keys by country
+    # Group URLs by country (includes multi-domain URLs)
     country_groups = {}
-    for key in keys:
-        remark = get_remark_from_url(key.vless_url)
+    for vless_url in all_vless_urls:
+        remark = get_remark_from_url(vless_url)
         country = get_country_from_remark(remark)
 
         if country not in country_groups:
             country_groups[country] = []
-        country_groups[country].append(key.vless_url)
+        country_groups[country].append(vless_url)
 
     # Sort within each country group: XHTTP first, then gRPC
     for country in country_groups:
@@ -278,15 +285,6 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     vless_urls = []
     for country in countries:
         vless_urls.extend(country_groups[country])
-
-    # Apply fingerprint randomization if enabled
-    if ENABLE_FP_RANDOMIZATION:
-        user_agent = request.headers.get("User-Agent", "")
-        # Apply fingerprint randomization (device-aware)
-        vless_urls = [add_or_replace_fingerprint(url, user_agent) for url in vless_urls]
-        # Apply standard browser ALPN to all TLS URLs
-        # DISABLED: Causing connection issues, testing fingerprint only
-        # vless_urls = [add_standard_alpn(url) for url in vless_urls]
 
     subscription_content = "\n".join(vless_urls)
 
