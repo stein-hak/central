@@ -61,8 +61,8 @@ BEGIN
     GET DIAGNOSTICS domains_count = ROW_COUNT;
 
     -- Create node-domain mappings (all marked as primary initially)
-    INSERT INTO node_domains (node_id, domain_id, is_primary, enabled, label)
-    SELECT n.id, d.id, true, true, 'primary'
+    INSERT INTO node_domains (node_id, domain_id, is_primary, enabled)
+    SELECT n.id, d.id, true, true
     FROM nodes n
     JOIN domains d ON n.domain = d.domain
     WHERE n.domain IS NOT NULL AND n.domain != ''
@@ -97,7 +97,7 @@ SELECT
     n.name as node_name,
     n.url as node_url,
     d.domain,
-    nd.label,
+    nd.display_name,
     nd.is_primary,
     nd.enabled
 FROM node_domains nd
@@ -119,12 +119,12 @@ ORDER BY n.name, nd.is_primary DESC, d.domain;
 -- Add new domain:
 --   INSERT INTO domains (domain) VALUES ('newdomain.com');
 --
--- Associate domain with node (with custom label):
---   INSERT INTO node_domains (node_id, domain_id, label)
---   SELECT 1, id, 'backup' FROM domains WHERE domain = 'newdomain.com';
+-- Associate domain with node (with custom display_name):
+--   INSERT INTO node_domains (node_id, domain_id, display_name)
+--   SELECT 1, id, 'node-backup' FROM domains WHERE domain = 'newdomain.com';
 --
 -- List all domains for node:
---   SELECT d.domain, nd.label, nd.is_primary
+--   SELECT d.domain, nd.display_name, nd.is_primary
 --   FROM node_domains nd
 --   JOIN domains d ON nd.domain_id = d.id
 --   WHERE nd.node_id = 1 AND nd.enabled = true;
@@ -132,6 +132,6 @@ ORDER BY n.name, nd.is_primary DESC, d.domain;
 -- Generate URLs in subscription service:
 --   For each key:
 --     - Get domains from node_domains where node_id = key.node_id
---     - For each domain: create_vless_url(domain=domain, label=label)
+--     - For each domain: regenerate_url_with_domain(domain=domain, display_name=display_name)
 --     - Result: multiple URLs for same client UUID
 -- ============================================================================
