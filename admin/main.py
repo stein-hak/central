@@ -2739,7 +2739,7 @@ async def add_manual_keys(
 async def recreate_client_on_nodes(
     request: Request,
     client_id: int,
-    reality_only: bool = Form(default=None),
+    reality_only: str = Form(default=None),
     db: Session = Depends(get_db)
 ):
     """
@@ -2775,14 +2775,19 @@ async def recreate_client_on_nodes(
         # Generate new UUID if no keys exist
         client_uuid = str(uuid.uuid4())
 
+    # Convert reality_only from string to bool (FormData sends "true"/"false" strings)
+    reality_only_bool = None
+    if reality_only is not None:
+        reality_only_bool = reality_only.lower() in ('true', '1', 'yes')
+
     # Auto-detect reality_only from existing keys if not specified
-    if reality_only is None:
+    if reality_only_bool is None:
         # Check if existing keys have Reality (security=reality in URL)
         if existing_key and existing_key.vless_url:
-            reality_only = "security=reality" in existing_key.vless_url
+            reality_only_bool = "security=reality" in existing_key.vless_url
         else:
             # Default to legacy (non-Reality) if no existing keys
-            reality_only = False
+            reality_only_bool = False
 
     # Delete all existing auto-generated keys for this client
     db.query(Key).filter(
@@ -2792,7 +2797,7 @@ async def recreate_client_on_nodes(
     db.commit()
 
     # Recreate keys on ALL nodes using async parallel method
-    node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=reality_only)
+    node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=reality_only_bool)
 
     # Save keys to database
     for result in node_results:
