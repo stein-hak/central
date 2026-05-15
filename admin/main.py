@@ -1577,6 +1577,9 @@ async def update_node(
 
     # Regenerate all VLESS URLs for this node's keys
     # This ensures keys are always in sync with current node name/domain
+    # First, fetch inbound stream_settings from the node to preserve Reality params
+    inbound_settings_cache = {}  # Cache inbound settings by inbound_id
+
     keys = db.query(Key).filter(Key.node_id == node_id, Key.manual == False).all()
     for key in keys:
         # Get client email for the key
@@ -1589,8 +1592,32 @@ async def update_node(
             else:
                 transport = "grpc"
 
+            # Fetch stream_settings from node's inbound (for Reality support)
+            stream_settings = None
+            if key.inbound_id not in inbound_settings_cache:
+                try:
+                    # Fetch inbound from node
+                    response = requests.get(
+                        f"{node.url}/panel/api/inbounds/get/{key.inbound_id}",
+                        cookies={"session": "dummy"},  # Not needed for read
+                        verify=False,
+                        timeout=5
+                    )
+                    if response.status_code == 200:
+                        inbound_data = response.json()
+                        if inbound_data.get("success"):
+                            inbound = inbound_data.get("obj", {})
+                            stream_settings_str = inbound.get("streamSettings", "{}")
+                            stream_settings = json.loads(stream_settings_str) if isinstance(stream_settings_str, str) else stream_settings_str
+                            inbound_settings_cache[key.inbound_id] = stream_settings
+                except Exception as e:
+                    print(f"Failed to fetch inbound {key.inbound_id} from node {node.name}: {e}")
+                    inbound_settings_cache[key.inbound_id] = None
+            else:
+                stream_settings = inbound_settings_cache[key.inbound_id]
+
             # UUID is stored in the key, not the client
-            new_vless_url = create_vless_url(node, client.email, str(key.uuid), key.inbound_id, transport)
+            new_vless_url = create_vless_url(node, client.email, str(key.uuid), key.inbound_id, transport, stream_settings)
             key.vless_url = new_vless_url
 
     db.commit()
