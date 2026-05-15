@@ -17,7 +17,7 @@ import requests
 import httpx
 import asyncio
 
-from database import get_db, Node, Client, Key, User, PaymentStatus, engine, Base
+from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, engine, Base
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -1452,6 +1452,24 @@ async def create_node(
     db.commit()
     db.refresh(node)
 
+    # Create domain and primary mapping in multi-domain tables
+    # Get or create domain
+    domain_obj = db.query(Domain).filter(Domain.domain == domain).first()
+    if not domain_obj:
+        domain_obj = Domain(domain=domain, enabled=True)
+        db.add(domain_obj)
+        db.flush()
+
+    # Create primary node-domain mapping
+    node_domain = NodeDomain(
+        node_id=node.id,
+        domain_id=domain_obj.id,
+        is_primary=True,
+        enabled=True
+    )
+    db.add(node_domain)
+    db.commit()
+
     # Sync all existing clients to this new node
     clients = db.query(Client).all()
     synced_count = 0
@@ -1515,6 +1533,8 @@ async def update_node(
 
     old_name = node.name
     old_upgraded = node.upgraded
+    old_domain = node.domain
+
     node.name = name
     node.url = url.rstrip('/')
     node.domain = domain
@@ -1523,6 +1543,34 @@ async def update_node(
     node.upgraded = upgraded.lower() in ('true', '1', 'yes', 'on')
 
     print(f"[UPDATE NODE] Changed upgraded: {old_upgraded} -> {node.upgraded}")
+
+    # Handle domain change in multi-domain tables
+    if old_domain != domain:
+        # Get or create new domain
+        new_domain_obj = db.query(Domain).filter(Domain.domain == domain).first()
+        if not new_domain_obj:
+            new_domain_obj = Domain(domain=domain, enabled=True)
+            db.add(new_domain_obj)
+            db.flush()
+
+        # Update primary mapping
+        primary_mapping = db.query(NodeDomain).filter(
+            NodeDomain.node_id == node_id,
+            NodeDomain.is_primary == True
+        ).first()
+
+        if primary_mapping:
+            # Update existing primary mapping to new domain
+            primary_mapping.domain_id = new_domain_obj.id
+        else:
+            # Create new primary mapping if doesn't exist
+            new_mapping = NodeDomain(
+                node_id=node_id,
+                domain_id=new_domain_obj.id,
+                is_primary=True,
+                enabled=True
+            )
+            db.add(new_mapping)
 
     db.commit()
     db.refresh(node)
@@ -1699,7 +1747,6 @@ async def get_domains(request: Request, db: Session = Depends(get_db)):
     """Get all domains"""
     check_auth(request)
 
-    from database import Domain
     domains = db.query(Domain).order_by(Domain.domain).all()
     return [{"id": d.id, "domain": d.domain, "enabled": d.enabled} for d in domains]
 
@@ -1709,7 +1756,6 @@ async def create_domain(request: Request, db: Session = Depends(get_db)):
     """Create new domain"""
     check_auth(request)
 
-    from database import Domain
     form = await request.form()
     domain_name = form.get("domain")
 
@@ -1733,8 +1779,6 @@ async def create_domain(request: Request, db: Session = Depends(get_db)):
 async def get_node_domains(request: Request, node_id: int, db: Session = Depends(get_db)):
     """Get all domains configured for a node"""
     check_auth(request)
-
-    from database import Domain, NodeDomain
 
     # Check node exists
     node = db.query(Node).filter(Node.id == node_id).first()
@@ -1766,8 +1810,6 @@ async def get_node_domains(request: Request, node_id: int, db: Session = Depends
 async def add_domain_to_node(request: Request, node_id: int, db: Session = Depends(get_db)):
     """Add domain to node"""
     check_auth(request)
-
-    from database import Domain, NodeDomain
 
     # Check node exists
     node = db.query(Node).filter(Node.id == node_id).first()
@@ -1819,8 +1861,6 @@ async def update_node_domain(request: Request, node_id: int, mapping_id: int, db
     """Update node-domain mapping"""
     check_auth(request)
 
-    from database import NodeDomain
-
     mapping = db.query(NodeDomain).filter(
         NodeDomain.id == mapping_id,
         NodeDomain.node_id == node_id
@@ -1846,8 +1886,6 @@ async def update_node_domain(request: Request, node_id: int, mapping_id: int, db
 async def remove_domain_from_node(request: Request, node_id: int, mapping_id: int, db: Session = Depends(get_db)):
     """Remove domain from node"""
     check_auth(request)
-
-    from database import NodeDomain
 
     mapping = db.query(NodeDomain).filter(
         NodeDomain.id == mapping_id,
