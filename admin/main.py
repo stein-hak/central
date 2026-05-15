@@ -566,6 +566,9 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                 settings = json.loads(inbound["settings"])
                 clients_list = settings.get("clients", [])
 
+                # Remove any existing clients with the same email (avoid duplicates)
+                clients_list = [c for c in clients_list if c.get("email") != full_email]
+
                 new_client = {
                     "id": str(key_uuid),
                     "flow": "",  # Empty for both gRPC and XHTTP (no XTLS)
