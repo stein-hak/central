@@ -213,10 +213,7 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     all_vless_urls = []
 
     for key in keys:
-        # Always include the primary URL (backwards compatible)
-        all_vless_urls.append(key.vless_url)
-
-        # Check if this node has additional domains configured
+        # Get ALL domains for this node (including primary)
         node_domains = db.query(NodeDomain, Domain, Node).join(
             Domain, NodeDomain.domain_id == Domain.id
         ).join(
@@ -224,19 +221,22 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         ).filter(
             NodeDomain.node_id == key.node_id,
             NodeDomain.enabled == True,
-            Domain.enabled == True,
-            NodeDomain.is_primary == False  # Only get non-primary domains
-        ).all()
+            Domain.enabled == True
+        ).order_by(NodeDomain.is_primary.desc()).all()  # Primary first
 
-        # Generate URLs for additional domains
-        for nd, domain, node in node_domains:
-            additional_url = regenerate_url_with_domain(
-                original_url=key.vless_url,
-                new_domain=domain.domain,
-                node_upgraded=node.upgraded or False,
-                display_name=nd.display_name
-            )
-            all_vless_urls.append(additional_url)
+        # If no domains configured, use stored URL (backwards compat)
+        if not node_domains:
+            all_vless_urls.append(key.vless_url)
+        else:
+            # Generate URLs for all configured domains (primary + additional)
+            for nd, domain, node in node_domains:
+                regenerated_url = regenerate_url_with_domain(
+                    original_url=key.vless_url,
+                    new_domain=domain.domain,
+                    node_upgraded=node.upgraded or False,
+                    display_name=nd.display_name
+                )
+                all_vless_urls.append(regenerated_url)
 
     # Build subscription content (one URL per line)
     # Group URLs by country, XHTTP first within each group, then randomize groups
