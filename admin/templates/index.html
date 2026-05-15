@@ -2280,10 +2280,10 @@
                         <td>${primaryBadge}</td>
                         <td>${statusBadge}</td>
                         <td>
+                            <button class="btn btn-sm" onclick="editDomainMapping(${nodeId}, ${d.id}, '${d.display_name || ''}', ${d.enabled})" style="font-size: 12px; padding: 4px 8px;">Edit</button>
                             ${!d.is_primary ? `
-                                <button class="btn btn-sm" onclick="editDomainMapping(${nodeId}, ${d.id}, '${d.display_name || ''}', ${d.enabled})" style="font-size: 12px; padding: 4px 8px;">Edit</button>
                                 <button class="btn btn-sm btn-danger" onclick="removeDomainFromNode(${nodeId}, ${d.id})" style="font-size: 12px; padding: 4px 8px;">Remove</button>
-                            ` : '<span style="color: #999; font-size: 12px;">Cannot remove primary</span>'}
+                            ` : ''}
                         </td>
                     </tr>
                 `;
