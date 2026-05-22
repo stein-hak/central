@@ -214,6 +214,7 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
 
     for key in keys:
         # Get ALL domains for this node (including primary)
+        # IMPORTANT: Only include enabled nodes to filter out deleted/disabled nodes
         node_domains = db.query(NodeDomain, Domain, Node).join(
             Domain, NodeDomain.domain_id == Domain.id
         ).join(
@@ -221,22 +222,24 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         ).filter(
             NodeDomain.node_id == key.node_id,
             NodeDomain.enabled == True,
-            Domain.enabled == True
+            Domain.enabled == True,
+            Node.enabled == True  # Filter out disabled nodes
         ).order_by(NodeDomain.is_primary.desc()).all()  # Primary first
 
-        # If no domains configured, use stored URL (backwards compat)
+        # Skip this key if node is disabled/deleted (no domains found)
         if not node_domains:
-            all_vless_urls.append(key.vless_url)
-        else:
-            # Generate URLs for all configured domains (primary + additional)
-            for nd, domain, node in node_domains:
-                regenerated_url = regenerate_url_with_domain(
-                    original_url=key.vless_url,
-                    new_domain=domain.domain,
-                    node_upgraded=node.upgraded or False,
-                    display_name=nd.display_name
-                )
-                all_vless_urls.append(regenerated_url)
+            # Don't include URLs for disabled/deleted nodes
+            continue
+
+        # Generate URLs for all configured domains (primary + additional)
+        for nd, domain, node in node_domains:
+            regenerated_url = regenerate_url_with_domain(
+                original_url=key.vless_url,
+                new_domain=domain.domain,
+                node_upgraded=node.upgraded or False,
+                display_name=nd.display_name
+            )
+            all_vless_urls.append(regenerated_url)
 
     # Build subscription content (one URL per line)
     # Group URLs by country, XHTTP first within each group, then randomize groups

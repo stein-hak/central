@@ -1713,17 +1713,41 @@ async def delete_node(request: Request, node_id: int, db: Session = Depends(get_
     # Delete all keys associated with this node from database
     keys_deleted = db.query(Key).filter(Key.node_id == node_id).delete()
 
+    # Get domains that will become orphaned after deleting this node
+    # (domains only used by this node and no other nodes)
+    domains_to_check = db.query(Domain.id).join(
+        NodeDomain, Domain.id == NodeDomain.domain_id
+    ).filter(NodeDomain.node_id == node_id).all()
+
+    domain_ids_to_check = [d.id for d in domains_to_check]
+
     # Clear stats cache for this node
     clear_node_stats_cache(node_id)
 
-    # Delete the node itself
+    # Delete the node itself (CASCADE will delete node_domains entries)
     db.delete(node)
+    db.flush()  # Flush to trigger cascade deletes
+
+    # Clean up orphaned domains (domains with no node_domains left)
+    orphaned_domains = 0
+    for domain_id in domain_ids_to_check:
+        # Check if domain still has any node mappings
+        remaining_mappings = db.query(NodeDomain).filter(
+            NodeDomain.domain_id == domain_id
+        ).count()
+
+        if remaining_mappings == 0:
+            # No nodes use this domain anymore - delete it
+            db.query(Domain).filter(Domain.id == domain_id).delete()
+            orphaned_domains += 1
+
     db.commit()
 
     return {
         "message": "Node deleted",
         "keys_removed": keys_deleted,
-        "clients_deleted_on_node": clients_deleted_on_node
+        "clients_deleted_on_node": clients_deleted_on_node,
+        "orphaned_domains_cleaned": orphaned_domains
     }
 
 

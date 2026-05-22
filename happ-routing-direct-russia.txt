@@ -1,0 +1,63 @@
+# Happ Routing Profile: Direct Russia
+
+## QR Code
+File: happ-routing-direct-russia.png
+
+## Deep Link
+happ://routing/onadd/eyJOYW1lIjoiRGlyZWN0IFJ1c3NpYSIsIkdsb2JhbFByb3h5IjoidHJ1ZSIsIlJlbW90ZUROU1R5cGUiOiJEb0giLCJSZW1vdGVETlNEb21haW4iOiJodHRwczovL2Nsb3VkZmxhcmUtZG5zLmNvbS9kbnMtcXVlcnkiLCJSZW1vdGVETlNJUCI6IjEuMS4xLjEiLCJEb21lc3RpY0ROU1R5cGUiOiJEb0giLCJEb21lc3RpY0ROU0RvbWFpbiI6Imh0dHBzOi8vZG5zLmdvb2dsZS9kbnMtcXVlcnkiLCJEb21lc3RpY0ROU0lQIjoiOC44LjguOCIsIkdlb2lwdXJsIjoiaHR0cHM6Ly9naXRodWIuY29tL0xveWFsc29sZGllci92MnJheS1ydWxlcy1kYXQvcmVsZWFzZXMvbGF0ZXN0L2Rvd25sb2FkL2dlb2lwLmRhdCIsIkdlb3NpdGV1cmwiOiJodHRwczovL2dpdGh1Yi5jb20vTG95YWxzb2xkaWVyL3YycmF5LXJ1bGVzLWRhdC9yZWxlYXNlcy9sYXRlc3QvZG93bmxvYWQvZ2Vvc2l0ZS5kYXQiLCJMYXN0VXBkYXRlZCI6IiIsIkRuc0hvc3RzIjp7ImNsb3VkZmxhcmUtZG5zLmNvbSI6IjEuMS4xLjEiLCJkbnMuZ29vZ2xlIjoiOC44LjguOCJ9LCJEaXJlY3RTaXRlcyI6WyJnZXQtbXlpcC5jb20iLCJ3d3cuZ2V0LW15aXAuY29tIiwiZ2Vvc2l0ZTpjYXRlZ29yeS1ydSJdLCJEaXJlY3RJcCI6WyJnZW9pcDpydSIsImdlb2lwOnByaXZhdGUiXSwiUHJveHlTaXRlcyI6W10sIlByb3h5SXAiOltdLCJCbG9ja1NpdGVzIjpbXSwiQmxvY2tJcCI6W10sIkRvbWFpblN0cmF0ZWd5IjoiSVBJZk5vbk1hdGNoIiwiRmFrZUROUyI6ImZhbHNlIn0=
+
+## Routing Configuration (Decoded)
+
+```json
+{
+  "Name": "Direct Russia",
+  "GlobalProxy": "true",
+  "RemoteDNSType": "DoH",
+  "RemoteDNSDomain": "https://cloudflare-dns.com/dns-query",
+  "RemoteDNSIP": "1.1.1.1",
+  "DomesticDNSType": "DoH",
+  "DomesticDNSDomain": "https://dns.google/dns-query",
+  "DomesticDNSIP": "8.8.8.8",
+  "Geoipurl": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
+  "Geositeurl": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
+  "LastUpdated": "",
+  "DnsHosts": {
+    "cloudflare-dns.com": "1.1.1.1",
+    "dns.google": "8.8.8.8"
+  },
+  "DirectSites": [
+    "get-myip.com",
+    "www.get-myip.com",
+    "geosite:category-ru"
+  ],
+  "DirectIp": [
+    "geoip:ru",
+    "geoip:private"
+  ],
+  "ProxySites": [],
+  "ProxyIp": [],
+  "BlockSites": [],
+  "BlockIp": [],
+  "DomainStrategy": "IPIfNonMatch",
+  "FakeDNS": "false"
+}
+```
+
+## Description
+
+This routing profile directs Russian websites and IP addresses through a direct connection (bypassing the VPN), while routing all other traffic through the proxy.
+
+### Direct Routes:
+- get-myip.com (for testing)
+- www.get-myip.com (for testing)
+- geosite:category-ru (all Russian websites)
+- geoip:ru (all Russian IP addresses)
+- geoip:private (private/local IP ranges)
+
+### DNS Configuration:
+- Remote DNS: Cloudflare DoH (1.1.1.1)
+- Domestic DNS: Google DoH (8.8.8.8)
+
+## Usage
+
+Scan the QR code with Happ app to import this routing profile.
