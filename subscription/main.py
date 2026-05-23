@@ -23,6 +23,9 @@ app = FastAPI(title="Subscription Service")
 # Get profile title from environment
 PROFILE_TITLE = os.getenv("PROFILE_TITLE", "VPN Service")
 
+# Get profile update interval from environment (in hours)
+PROFILE_UPDATE_INTERVAL = os.getenv("PROFILE_UPDATE_INTERVAL", "3")
+
 
 def add_standard_alpn(vless_url: str) -> str:
     """
@@ -298,7 +301,7 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     headers = {
         # Profile info - brand name from env
         "profile-title": PROFILE_TITLE,
-        "profile-update-interval": "24",  # Update every 24 hours
+        "profile-update-interval": PROFILE_UPDATE_INTERVAL,  # Update interval in hours (configurable)
 
         # Usage info (TODO: add real traffic stats from nodes)
         # Format: upload=bytes; download=bytes; total=bytes; expire=timestamp
