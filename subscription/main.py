@@ -27,6 +27,30 @@ PROFILE_TITLE = os.getenv("PROFILE_TITLE", "VPN Service")
 PROFILE_UPDATE_INTERVAL = os.getenv("PROFILE_UPDATE_INTERVAL", "3")
 
 
+def get_client_ip(request: Request) -> str:
+    """
+    Get real client IP from request, considering proxy headers
+
+    Checks in order:
+    1. X-Real-IP (set by nginx)
+    2. X-Forwarded-For (first IP in chain)
+    3. request.client.host (fallback for direct connections)
+    """
+    # Check X-Real-IP header (preferred)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+
+    # Check X-Forwarded-For header
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, get the first (client)
+        return forwarded_for.split(",")[0].strip()
+
+    # Fallback to direct connection IP
+    return request.client.host if request.client else "Unknown"
+
+
 def add_standard_alpn(vless_url: str) -> str:
     """
     Add standard browser ALPN (h2,http/1.1) to VLESS URL
@@ -168,7 +192,7 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     """
     # Log User-Agent for client behavior analysis
     user_agent = request.headers.get("User-Agent", "Unknown")
-    client_ip = request.client.host if request.client else "Unknown"
+    client_ip = get_client_ip(request)
     logger.info(f"Subscription request - Client: {client_email}, IP: {client_ip}, User-Agent: {user_agent}")
 
     # Find client
