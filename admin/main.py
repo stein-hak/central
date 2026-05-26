@@ -17,6 +17,9 @@ import requests
 import httpx
 import asyncio
 
+from x_ui_client import XUIClient
+from x_ui_client.exceptions import AuthenticationError, APIError
+
 from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, engine, Base
 
 # Create tables
@@ -89,6 +92,70 @@ def clear_node_stats_cache(node_id: int):
 # ============================================================================
 # 3x-ui API Integration
 # ============================================================================
+
+def get_xui_client(node: Node) -> XUIClient:
+    """
+    Create and authenticate XUIClient for a node.
+    Supports both 2.8.x (no CSRF) and 3.x (with CSRF).
+
+    Args:
+        node: Node configuration with url, username, password
+
+    Returns:
+        Authenticated XUIClient instance
+
+    Raises:
+        AuthenticationError: If login fails
+    """
+    xui = XUIClient(
+        base_url=node.url,
+        username=node.username,
+        password=node.password,
+        verify_ssl=False
+    )
+
+    if not xui.login():
+        raise AuthenticationError(f"Failed to login to node {node.name}")
+
+    return xui
+
+
+async def async_get_xui_client(node: Node) -> XUIClient:
+    """
+    Async version: Create and authenticate XUIClient in a separate thread.
+    Supports both 2.8.x (no CSRF) and 3.x (with CSRF).
+
+    Args:
+        node: Node configuration with url, username, password
+
+    Returns:
+        Authenticated XUIClient instance
+
+    Raises:
+        AuthenticationError: If login fails
+    """
+    # Run synchronous XUIClient operations in thread pool
+    loop = asyncio.get_event_loop()
+    xui = await loop.run_in_executor(None, lambda: get_xui_client(node))
+    return xui
+
+
+async def async_xui_call(xui: XUIClient, method_name: str, *args, **kwargs):
+    """
+    Execute XUIClient method asynchronously in thread pool.
+
+    Args:
+        xui: Authenticated XUIClient instance
+        method_name: Name of the method to call (e.g., 'get_inbounds', 'add_client')
+        *args, **kwargs: Arguments to pass to the method
+
+    Returns:
+        Method result
+    """
+    loop = asyncio.get_event_loop()
+    method = getattr(xui, method_name)
+    return await loop.run_in_executor(None, lambda: method(*args, **kwargs))
+
 
 def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id: int, transport: str = "grpc", stream_settings: dict = None, domain_override: str = None, domain_label: str = None) -> str:
     """Generate VLESS URL for client (supports both TLS and Reality, multi-domain)
@@ -207,101 +274,50 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
 
 
 def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Session):
-    """Create client on a 3x-ui node"""
+    """Create client on a 3x-ui node using batch operations"""
     try:
-        session = requests.Session()
+        # Get authenticated client (supports both 2.8.x and 3.x with CSRF)
+        xui = get_xui_client(node)
 
-        # Login to 3x-ui
-        login_response = session.post(
-            f"{node.url}/login",
-            data={"username": node.username, "password": node.password},
-            verify=False,
-            timeout=10
+        # Prepare client data for batch sync
+        client_data = [{
+            "id": str(client_uuid),
+            "flow": "",
+            "email": client.email,  # Base email, will get suffix per inbound
+            "limitIp": 0,
+            "totalGB": 0,
+            "expiryTime": 0,
+            "enable": client.enabled,
+            "tgId": "",
+            "subId": client.email
+        }]
+
+        # Use batch sync to add client to ALL VLESS inbounds in one operation per inbound
+        # email_suffix_template="_{inbound_idx}" makes unique emails like user@example.com_0, _1, _2
+        results = xui.batch_sync_clients_to_all_vless_inbounds(
+            clients=client_data,
+            email_suffix_template="_{inbound_idx}"
         )
 
-        if login_response.status_code != 200:
-            raise Exception(f"Login failed: {login_response.status_code}")
-
-        # Get inbounds to find first VLESS inbound
-        inbounds_response = session.get(
-            f"{node.url}/panel/api/inbounds/list",
-            verify=False,
-            timeout=10
-        )
-
-        if inbounds_response.status_code != 200:
-            raise Exception(f"Failed to get inbounds: {inbounds_response.status_code}")
-
-        inbounds_data = inbounds_response.json()
-        inbounds = inbounds_data.get("obj", [])
-
-        # Find ALL VLESS inbounds
-        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
-
-        if not vless_inbounds:
+        if not results:
             raise Exception("No VLESS inbounds found on node")
 
-        # Add client to ALL VLESS inbounds
+        # Get inbounds for URL generation
+        inbounds = xui.get_inbounds()
+        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
+
+        # Generate URLs and save keys
         first_vless_url = None
         for idx, vless_inbound in enumerate(vless_inbounds):
             inbound_id = vless_inbound["id"]
-            inbound_remark = vless_inbound.get("remark", "unknown")
 
-            # Create unique email per inbound using _0, _1, _2 suffix
-            client_email = f"{client.email}_{idx}"
+            # Check if this inbound was successfully updated
+            if inbound_id not in results:
+                continue
 
-            # Parse existing settings to check if client already exists
-            settings = json.loads(vless_inbound.get("settings", "{}"))
-            clients_list = settings.get("clients", [])
-
-            # Check if client already exists
-            existing_client = None
-            for c in clients_list:
-                if c.get("email") == client_email:
-                    existing_client = c
-                    break
-
-            if existing_client:
-                # Delete existing client first (ignore errors if client doesn't exist)
-                try:
-                    delete_response = session.post(
-                        f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client_email}",
-                        verify=False,
-                        timeout=10
-                    )
-                    # Continue even if delete fails (client might be gone already)
-                except Exception:
-                    pass  # Continue to add client anyway
-
-            # Add client using addClient endpoint (safe, doesn't override inbound)
-            client_config = {
-                "id": inbound_id,
-                "settings": json.dumps({
-                    "clients": [
-                        {
-                            "id": str(client_uuid),
-                            "flow": "",
-                            "email": client_email,
-                            "limitIp": 0,  # 0 = unlimited
-                            "totalGB": 0,
-                            "expiryTime": 0,
-                            "enable": client.enabled,
-                            "tgId": "",
-                            "subId": client_email
-                        }
-                    ]
-                })
-            }
-
-            add_response = session.post(
-                f"{node.url}/panel/api/inbounds/addClient",
-                json=client_config,
-                verify=False,
-                timeout=10
-            )
-
-            if add_response.status_code != 200:
-                print(f"   Warning: Failed to add client to {inbound_remark}: {add_response.status_code}")
+            success, count = results[inbound_id]
+            if not success:
+                print(f"   Warning: Failed to sync to inbound {inbound_id}")
                 continue
 
             # Parse stream settings for Reality support
@@ -364,31 +380,11 @@ def sync_client_to_node(node: Node, client: Client, client_uuid: str, db: Sessio
 def delete_client_from_node(node: Node, client: Client, db: Session):
     """Delete client from a 3x-ui node"""
     try:
-        session = requests.Session()
+        # Get authenticated client (supports both 2.8.x and 3.x with CSRF)
+        xui = get_xui_client(node)
 
-        # Login
-        login_response = session.post(
-            f"{node.url}/login",
-            data={"username": node.username, "password": node.password},
-            verify=False,
-            timeout=10
-        )
-
-        if login_response.status_code != 200:
-            return False, f"Login failed: {login_response.status_code}"
-
-        # Get inbounds to find VLESS-gRPC-Local
-        inbounds_response = session.get(
-            f"{node.url}/panel/api/inbounds/list",
-            verify=False,
-            timeout=10
-        )
-
-        if inbounds_response.status_code != 200:
-            return False, f"Failed to get inbounds: {inbounds_response.status_code}"
-
-        inbounds_data = inbounds_response.json()
-        inbounds = inbounds_data.get("obj", [])
+        # Get inbounds
+        inbounds = xui.get_inbounds()
 
         # Find VLESS-gRPC-Local inbound
         vless_inbound = None
@@ -400,22 +396,11 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
         if vless_inbound:
             inbound_id = vless_inbound["id"]
 
-            # Try to delete client using delClientByEmail endpoint
+            # Try to delete client using XUIClient
             # Don't fail if client doesn't exist on server (could be manually deleted)
             try:
-                delete_response = session.post(
-                    f"{node.url}/panel/api/inbounds/{inbound_id}/delClientByEmail/{client.email}",
-                    verify=False,
-                    timeout=10
-                )
-
-                # Ignore 404-like errors (client already gone from server)
-                if delete_response.status_code != 200:
-                    result = delete_response.json()
-                    # If client not found, continue anyway to clean database
-                    if not result.get('success'):
-                        pass  # Client might not exist, that's okay
-            except Exception as e:
+                xui.delete_client(inbound_id, client.email)
+            except Exception:
                 # Even if delete fails, continue to clean database
                 pass
 
@@ -431,12 +416,7 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
             xhttp_email = f"{client.email}-xhttp"
 
             try:
-                session.post(
-                    f"{node.url}/panel/api/inbounds/{xhttp_inbound_id}/delClientByEmail/{xhttp_email}",
-                    verify=False,
-                    timeout=10
-                )
-                # Ignore response - client might not exist in XHTTP inbound
+                xui.delete_client(xhttp_inbound_id, xhttp_email)
             except Exception:
                 # Ignore XHTTP delete errors
                 pass
@@ -487,160 +467,94 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
     }
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            # Login to node
-            login_response = await client.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password}
-            )
+        # Get authenticated XUIClient in thread pool (supports 2.8.x and 3.x with CSRF)
+        xui = await async_get_xui_client(node)
 
-            if login_response.status_code != 200:
-                result["errors"].append(f"Login failed: {login_response.status_code}")
-                return result
+        # Prepare client data for batch sync
+        client_data = [{
+            "id": str(client_uuid),
+            "flow": "",
+            "email": client_email,  # Base email
+            "limitIp": 0,
+            "totalGB": 0,
+            "expiryTime": 0,
+            "enable": True,
+            "tgId": "",
+            "subId": ""
+        }]
 
-            # Get cookies from login
-            cookies = login_response.cookies
+        # Use batch sync in thread pool - this will add to ALL VLESS inbounds
+        batch_results = await async_xui_call(
+            xui,
+            'batch_sync_clients_to_all_vless_inbounds',
+            client_data,
+            "_{inbound_idx}"
+        )
 
-            # Get inbounds list
-            inbounds_response = await client.get(
-                f"{node.url}/panel/api/inbounds/list",
-                cookies=cookies
-            )
+        if not batch_results:
+            error_msg = "No VLESS inbounds found"
+            result["errors"].append(error_msg)
+            return result
 
-            if inbounds_response.status_code != 200:
-                result["errors"].append("Failed to get inbounds")
-                return result
+        # Get inbounds to filter by reality_only and generate keys info
+        inbounds = await async_xui_call(xui, 'get_inbounds')
+        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
-            inbounds = inbounds_response.json().get("obj", [])
+        # Filter by reality_only flag
+        for idx, inbound in enumerate(vless_inbounds):
+            inbound_id = inbound["id"]
 
-            # Find ALL VLESS inbounds
-            vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
+            # Check if batch operation succeeded for this inbound
+            if inbound_id not in batch_results:
+                continue
 
-            # Filter by inbound type based on reality_only flag
-            filtered_inbounds = []
-            for inbound in vless_inbounds:
-                try:
-                    stream_settings = json.loads(inbound.get("streamSettings", "{}"))
-                    is_reality = stream_settings.get("security") == "reality"
+            success, count = batch_results[inbound_id]
+            if not success:
+                result["errors"].append(f"Failed to sync to inbound {inbound_id}")
+                continue
 
-                    # If reality_only=True, only include Reality inbounds
-                    # If reality_only=False, only include non-Reality inbounds (legacy TLS/none)
-                    if reality_only and is_reality:
-                        filtered_inbounds.append(inbound)
-                    elif not reality_only and not is_reality:
-                        filtered_inbounds.append(inbound)
-                except:
-                    # If can't parse stream settings, treat as legacy (non-Reality)
-                    if not reality_only:
-                        filtered_inbounds.append(inbound)
+            # Check Reality filter
+            try:
+                stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                is_reality = stream_settings.get("security") == "reality"
 
-            vless_inbounds = filtered_inbounds
+                # Skip if doesn't match reality_only filter
+                if reality_only and not is_reality:
+                    continue
+                if not reality_only and is_reality:
+                    continue
+            except:
+                # If can't parse, treat as non-Reality
+                if reality_only:
+                    continue
 
-            if not vless_inbounds:
-                error_msg = "No Reality VLESS inbounds found" if reality_only else "No legacy VLESS inbounds found"
-                result["errors"].append(error_msg)
-                return result
+            # Determine transport type
+            inbound_remark = inbound.get("remark", "").lower()
+            if "xhttp" in inbound_remark:
+                transport = "xhttp"
+            elif "grpc" in inbound_remark:
+                transport = "grpc"
+            elif "tcp" in inbound_remark:
+                transport = "tcp"
+            else:
+                transport = "grpc"
 
-            # Prepare all inbound updates in parallel
-            update_tasks = []
+            # Parse stream settings
+            stream_settings_dict = None
+            try:
+                stream_settings_dict = json.loads(inbound.get("streamSettings", "{}")) if inbound.get("streamSettings") else None
+            except:
+                pass
 
-            for idx, inbound in enumerate(vless_inbounds):
-                # Use the shared UUID for all inbounds (same client, same UUID everywhere)
-                key_uuid = client_uuid
+            result["keys"].append({
+                "uuid": str(client_uuid),
+                "transport": transport.upper(),
+                "email": f"{client_email}_{idx}",
+                "inbound_id": inbound_id,
+                "stream_settings": stream_settings_dict
+            })
 
-                # Create unique email per inbound using _0, _1, _2 suffix
-                full_email = f"{client_email}_{idx}"
-
-                # Determine transport type from inbound remark
-                inbound_remark = inbound.get("remark", "").lower()
-                if "xhttp" in inbound_remark:
-                    transport = "xhttp"
-                elif "grpc" in inbound_remark:
-                    transport = "grpc"
-                elif "tcp" in inbound_remark:
-                    transport = "tcp"
-                else:
-                    transport = "grpc"  # default
-
-                # Prepare client data
-                settings = json.loads(inbound["settings"])
-                clients_list = settings.get("clients", [])
-
-                # Remove any existing clients with the same email (avoid duplicates)
-                clients_list = [c for c in clients_list if c.get("email") != full_email]
-
-                new_client = {
-                    "id": str(key_uuid),
-                    "flow": "",  # Empty for both gRPC and XHTTP (no XTLS)
-                    "email": full_email,
-                    "limitIp": 0,
-                    "totalGB": 0,
-                    "expiryTime": 0,
-                    "enable": True,
-                    "tgId": "",
-                    "subId": ""
-                }
-
-                clients_list.append(new_client)
-                settings["clients"] = clients_list
-
-                # Update inbound data
-                update_data = {
-                    "up": inbound["up"],
-                    "down": inbound["down"],
-                    "total": inbound["total"],
-                    "remark": inbound["remark"],
-                    "enable": inbound["enable"],
-                    "expiryTime": inbound["expiryTime"],
-                    "listen": inbound.get("listen", ""),
-                    "port": inbound["port"],
-                    "protocol": inbound["protocol"],
-                    "settings": json.dumps(settings),
-                    "streamSettings": inbound["streamSettings"],
-                    "sniffing": inbound["sniffing"]
-                }
-
-                # Parse stream settings for Reality support
-                stream_settings_dict = None
-                try:
-                    stream_settings_dict = json.loads(inbound["streamSettings"]) if inbound.get("streamSettings") else None
-                except:
-                    stream_settings_dict = None
-
-                # Create update task (will execute in parallel)
-                update_tasks.append({
-                    "task": client.post(
-                        f"{node.url}/panel/api/inbounds/update/{inbound['id']}",
-                        json=update_data,
-                        cookies=cookies
-                    ),
-                    "uuid": str(key_uuid),
-                    "transport": transport.upper(),
-                    "email": full_email,
-                    "inbound_id": inbound["id"],
-                    "stream_settings": stream_settings_dict
-                })
-
-            # Execute all inbound updates in parallel
-            if update_tasks:
-                update_responses = await asyncio.gather(*[t["task"] for t in update_tasks], return_exceptions=True)
-
-                for i, response in enumerate(update_responses):
-                    task_info = update_tasks[i]
-                    if isinstance(response, Exception):
-                        result["errors"].append(f"{task_info['transport']} update exception: {str(response)}")
-                    elif response.status_code == 200:
-                        result["keys"].append({
-                            "uuid": task_info["uuid"],
-                            "transport": task_info["transport"],
-                            "email": task_info["email"],
-                            "inbound_id": task_info["inbound_id"],
-                            "stream_settings": task_info.get("stream_settings")
-                        })
-                    else:
-                        result["errors"].append(f"{task_info['transport']} update failed: {response.status_code}")
-
-            result["success"] = len(result["keys"]) > 0
+        result["success"] = len(result["keys"]) > 0
 
     except Exception as e:
         result["errors"].append(f"Exception: {str(e)}")
@@ -713,64 +627,52 @@ async def async_delete_client_from_node(node: Node, client: Client, db: Session)
     }
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as http_client:
-            # Login
-            login_response = await http_client.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password}
-            )
+        # Get authenticated XUIClient in thread pool
+        xui = await async_get_xui_client(node)
 
-            if login_response.status_code != 200:
-                result["message"] = f"Login failed: {login_response.status_code}"
-                return result
+        # Get inbounds to find matching clients
+        inbounds = await async_xui_call(xui, 'get_inbounds')
+        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
-            cookies = login_response.cookies
+        # Collect emails to delete per inbound (batch operation)
+        async def batch_delete_from_inbound(inbound_id, emails_to_delete):
+            """Helper to batch delete clients from one inbound"""
+            try:
+                success, count = await async_xui_call(xui, 'batch_delete_clients_from_inbound', inbound_id, emails_to_delete)
+                return count if success else 0
+            except:
+                return 0
 
-            # Get inbounds to find gRPC and XHTTP IDs
-            inbounds_response = await http_client.get(
-                f"{node.url}/panel/api/inbounds/list",
-                cookies=cookies
-            )
+        # Find all matching emails per inbound
+        delete_tasks = []
+        for inbound in vless_inbounds:
+            inbound_id = inbound["id"]
 
-            if inbounds_response.status_code != 200:
-                result["message"] = "Failed to get inbounds"
-                return result
+            # Parse existing clients
+            settings_raw = inbound.get("settings", "{}")
+            settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+            clients_list = settings.get("clients", [])
 
-            inbounds = inbounds_response.json().get("obj", [])
+            # Find all clients that match the base email
+            emails_to_delete = []
+            for existing_client in clients_list:
+                existing_email = existing_client.get("email", "")
+                # Match if email equals base email or starts with base email + separator
+                if existing_email == client.email or existing_email.startswith(f"{client.email}_") or existing_email.startswith(f"{client.email}-"):
+                    emails_to_delete.append(existing_email)
 
-            # Find ALL VLESS inbounds and check for matching clients
-            vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
+            # Add batch delete task for this inbound
+            if emails_to_delete:
+                delete_tasks.append(batch_delete_from_inbound(inbound_id, emails_to_delete))
 
-            # Delete from all VLESS inbounds IN PARALLEL
-            delete_tasks = []
+        # Execute all batch deletes in parallel
+        deleted_count = 0
+        if delete_tasks:
+            delete_results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+            deleted_count = sum(r for r in delete_results if isinstance(r, int))
 
-            for inbound in vless_inbounds:
-                # Parse existing clients in this inbound
-                settings = json.loads(inbound.get("settings", "{}"))
-                clients_list = settings.get("clients", [])
-
-                # Find all clients that match the base email (handles both old and new formats)
-                for existing_client in clients_list:
-                    existing_email = existing_client.get("email", "")
-                    # Match if email equals base email or starts with base email + separator
-                    if existing_email == client.email or existing_email.startswith(f"{client.email}_") or existing_email.startswith(f"{client.email}-"):
-                        delete_tasks.append(
-                            http_client.post(
-                                f"{node.url}/panel/api/inbounds/{inbound['id']}/delClientByEmail/{existing_email}",
-                                cookies=cookies
-                            )
-                        )
-
-            # Execute all deletes in parallel
-            deleted_count = 0
-            if delete_tasks:
-                delete_responses = await asyncio.gather(*delete_tasks, return_exceptions=True)
-                for response in delete_responses:
-                    if not isinstance(response, Exception):
-                        deleted_count += 1
-
-            result["success"] = True
-            result["message"] = f"Deleted from {deleted_count} inbounds"
+        result["success"] = True
+        result["message"] = f"Deleted {deleted_count} clients from {len(delete_tasks)} inbounds"
 
     except Exception as e:
         result["message"] = f"Exception: {str(e)}"
@@ -1311,31 +1213,11 @@ async def get_node_stats(request: Request, node_id: int, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Node not found")
 
     try:
-        session = requests.Session()
-
-        # Login
-        login_response = session.post(
-            f"{node.url}/login",
-            data={"username": node.username, "password": node.password},
-            verify=False,
-            timeout=10
-        )
-
-        if login_response.status_code != 200:
-            return {"online": False, "total_clients": 0, "enabled_clients": 0, "online_clients": 0, "traffic_up": 0, "traffic_down": 0, "traffic_total": 0}
+        # Get authenticated client (supports both 2.8.x and 3.x with CSRF)
+        xui = get_xui_client(node)
 
         # Get inbounds
-        inbounds_response = session.get(
-            f"{node.url}/panel/api/inbounds/list",
-            verify=False,
-            timeout=10
-        )
-
-        if inbounds_response.status_code != 200:
-            return {"online": False, "total_clients": 0, "enabled_clients": 0, "online_clients": 0, "traffic_up": 0, "traffic_down": 0, "traffic_total": 0}
-
-        inbounds_data = inbounds_response.json()
-        inbounds = inbounds_data.get("obj", [])
+        inbounds = xui.get_inbounds()
 
         # Sum traffic across ALL inbounds
         total_up = 0
