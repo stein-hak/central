@@ -20,7 +20,7 @@ import asyncio
 from x_ui_client import XUIClient
 from x_ui_client.exceptions import AuthenticationError, APIError
 
-from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, engine, Base
+from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, SubscriptionDomain, engine, Base
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -87,6 +87,49 @@ def clear_node_stats_cache(node_id: int):
     cache_key = f"stats_{node_id}"
     if cache_key in stats_cache:
         del stats_cache[cache_key]
+
+
+# ============================================================================
+# Subscription Domain Management
+# ============================================================================
+
+def get_subscription_base_url(db: Session) -> str:
+    """
+    Get active subscription domain URL.
+
+    Priority:
+    1. Primary enabled domain from database
+    2. First enabled domain from database
+    3. SUBSCRIPTION_URL environment variable (fallback)
+
+    Returns full URL (e.g., https://sub.example.com)
+    """
+    # Try to get primary domain
+    primary_domain = db.query(SubscriptionDomain).filter(
+        SubscriptionDomain.enabled == True,
+        SubscriptionDomain.is_primary == True
+    ).first()
+
+    if primary_domain:
+        # Ensure it has protocol
+        domain = primary_domain.domain
+        if not domain.startswith('http'):
+            domain = f'https://{domain}'
+        return domain
+
+    # Fallback to any enabled domain
+    any_domain = db.query(SubscriptionDomain).filter(
+        SubscriptionDomain.enabled == True
+    ).first()
+
+    if any_domain:
+        domain = any_domain.domain
+        if not domain.startswith('http'):
+            domain = f'https://{domain}'
+        return domain
+
+    # Final fallback to environment variable
+    return os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
 
 
 # ============================================================================
@@ -483,12 +526,13 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
             "subId": ""
         }]
 
-        # Use batch sync in thread pool - this will add to ALL VLESS inbounds
+        # Use batch sync in thread pool - this will add to filtered VLESS inbounds
         batch_results = await async_xui_call(
             xui,
             'batch_sync_clients_to_all_vless_inbounds',
             client_data,
-            "_{inbound_idx}"
+            "_{inbound_id}",
+            reality_only
         )
 
         if not batch_results:
@@ -549,7 +593,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
             result["keys"].append({
                 "uuid": str(client_uuid),
                 "transport": transport.upper(),
-                "email": f"{client_email}_{idx}",
+                "email": f"{client_email}_{inbound_id}",
                 "inbound_id": inbound_id,
                 "stream_settings": stream_settings_dict
             })
@@ -717,7 +761,7 @@ async def async_delete_client_from_all_nodes(nodes: List[Node], client: Client, 
 
 async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bool, db: Session) -> dict:
     """
-    Toggle client enable/disable on a single node (async version).
+    Toggle client enable/disable on a single node (async version using x-ui-client).
     Returns: dict with node info, success status, and any errors
     """
     start_time = time.time()
@@ -731,116 +775,12 @@ async def async_toggle_client_on_node(node: Node, client_email: str, enabled: bo
     }
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as http_client:
-            # Login
-            login_response = await http_client.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password}
-            )
+        # Use x-ui-client library
+        xui = await async_get_xui_client(node)
+        success, toggled_count = await async_xui_call(xui, 'toggle_client', client_email, enabled)
 
-            if login_response.status_code != 200:
-                result["message"] = f"Login failed: {login_response.status_code}"
-                return result
-
-            cookies = login_response.cookies
-
-            # Get inbounds
-            inbounds_response = await http_client.get(
-                f"{node.url}/panel/api/inbounds/list",
-                cookies=cookies
-            )
-
-            if inbounds_response.status_code != 200:
-                result["message"] = "Failed to get inbounds"
-                return result
-
-            inbounds = inbounds_response.json().get("obj", [])
-
-            # Find inbounds and clients
-            grpc_inbound = None
-            xhttp_inbound = None
-
-            for inbound in inbounds:
-                remark = inbound.get("remark", "").lower()
-                if "grpc" in remark:
-                    grpc_inbound = inbound
-                elif "xhttp" in remark:
-                    xhttp_inbound = inbound
-
-            # Toggle both inbounds IN PARALLEL
-            toggle_tasks = []
-
-            # Toggle gRPC inbound
-            if grpc_inbound:
-                settings = json.loads(grpc_inbound.get("settings", "{}"))
-                clients = settings.get("clients", [])
-
-                # Find client and update enable field
-                client_found = False
-                for client in clients:
-                    if client.get("email") == client_email:
-                        client["enable"] = enabled
-                        client_uuid = client.get("id")
-                        client_found = True
-
-                        # Prepare update payload
-                        update_payload = {
-                            "id": grpc_inbound["id"],
-                            "settings": json.dumps({"clients": [client]})
-                        }
-
-                        toggle_tasks.append(
-                            http_client.post(
-                                f"{node.url}/panel/api/inbounds/updateClient/{client_uuid}",
-                                json=update_payload,
-                                cookies=cookies
-                            )
-                        )
-                        break
-
-                if not client_found:
-                    result["message"] = f"Client {client_email} not found in gRPC inbound"
-
-            # Toggle XHTTP inbound
-            if xhttp_inbound:
-                xhttp_email = f"{client_email}-xhttp"
-                settings = json.loads(xhttp_inbound.get("settings", "{}"))
-                clients = settings.get("clients", [])
-
-                # Find client and update enable field
-                for client in clients:
-                    if client.get("email") == xhttp_email:
-                        client["enable"] = enabled
-                        client_uuid = client.get("id")
-
-                        # Prepare update payload
-                        update_payload = {
-                            "id": xhttp_inbound["id"],
-                            "settings": json.dumps({"clients": [client]})
-                        }
-
-                        toggle_tasks.append(
-                            http_client.post(
-                                f"{node.url}/panel/api/inbounds/updateClient/{client_uuid}",
-                                json=update_payload,
-                                cookies=cookies
-                            )
-                        )
-                        break
-
-            # Execute all toggles in parallel
-            toggled_count = 0
-            if toggle_tasks:
-                toggle_responses = await asyncio.gather(*toggle_tasks, return_exceptions=True)
-                for response in toggle_responses:
-                    if not isinstance(response, Exception):
-                        if response.status_code == 200:
-                            response_data = response.json()
-                            if response_data.get("success"):
-                                toggled_count += 1
-
-            result["success"] = toggled_count > 0
-            result["message"] = f"Toggled {toggled_count} inbounds to {'enabled' if enabled else 'disabled'}"
+        result["success"] = success
+        result["message"] = f"Toggled {toggled_count} inbounds to {'enabled' if enabled else 'disabled'}"
 
     except Exception as e:
         result["message"] = f"Exception: {str(e)}"
@@ -886,7 +826,7 @@ async def async_toggle_client_on_all_nodes(nodes: List[Node], client_email: str,
 
 async def async_get_node_stats(node: Node) -> dict:
     """
-    Get stats from a single node (async version).
+    Get stats from a single node (async version using XUIClient).
     Returns: dict with node stats
     """
     result = {
@@ -902,82 +842,75 @@ async def async_get_node_stats(node: Node) -> dict:
     }
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-            # Login
-            login_response = await client.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password}
-            )
+        # Use XUIClient for proper CSRF support (v2.8.x and v3.x compatible)
+        xui = await async_get_xui_client(node)
 
-            if login_response.status_code != 200:
-                return result
+        # Get inbounds
+        inbounds = await async_xui_call(xui, 'get_inbounds')
 
-            cookies = login_response.cookies
+        # Sum traffic across ALL inbounds
+        total_up = 0
+        total_down = 0
 
-            # Get inbounds
-            inbounds_response = await client.get(
-                f"{node.url}/panel/api/inbounds/list",
-                cookies=cookies
-            )
+        # Find first VLESS inbound for client counts (prefer gRPC)
+        vless_inbound = None
+        grpc_inbound = None
 
-            if inbounds_response.status_code != 200:
-                return result
+        for inbound in inbounds:
+            # Sum traffic from all inbounds
+            if "up" in inbound:
+                total_up += inbound.get("up", 0)
+            if "down" in inbound:
+                total_down += inbound.get("down", 0)
 
-            inbounds_data = inbounds_response.json()
-            inbounds = inbounds_data.get("obj", [])
+            # Find VLESS inbounds
+            if inbound.get("protocol") == "vless":
+                if not vless_inbound:
+                    vless_inbound = inbound
 
-            # Sum traffic across ALL inbounds
-            total_up = 0
-            total_down = 0
-
-            # Find gRPC inbound for client counts
-            grpc_inbound = None
-            for inbound in inbounds:
-                # Sum traffic from all inbounds
-                if "up" in inbound:
-                    total_up += inbound.get("up", 0)
-                if "down" in inbound:
-                    total_down += inbound.get("down", 0)
-
-                # Find gRPC inbound for client stats
+                # Prefer gRPC inbound if available
                 remark = inbound.get("remark", "").lower()
                 if "grpc" in remark:
                     grpc_inbound = inbound
 
-            result["online"] = True
-            result["traffic_up"] = total_up
-            result["traffic_down"] = total_down
-            result["traffic_total"] = total_up + total_down
+        result["online"] = True
+        result["traffic_up"] = total_up
+        result["traffic_down"] = total_down
+        result["traffic_total"] = total_up + total_down
 
-            if not grpc_inbound:
-                return result
+        # Use gRPC inbound if available, otherwise use any VLESS inbound
+        target_inbound = grpc_inbound if grpc_inbound else vless_inbound
 
-            # Count clients
-            settings = json.loads(grpc_inbound.get("settings", "{}"))
-            clients = settings.get("clients", [])
-            total_clients = len(clients)
+        if not target_inbound:
+            return result
 
-            # Get client stats to count truly online clients
-            client_stats = grpc_inbound.get("clientStats", [])
+        # Count clients
+        settings_raw = target_inbound.get("settings", "{}")
+        settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+        clients = settings.get("clients", [])
+        total_clients = len(clients)
 
-            # Count clients that are ACTUALLY online (lastOnline within 2 minutes)
-            current_time_ms = time.time() * 1000
-            online_threshold_ms = 2 * 60 * 1000  # 2 minutes in milliseconds
+        # Get client stats to count truly online clients
+        client_stats = target_inbound.get("clientStats", [])
 
-            online_client_emails = set()
-            for stat in client_stats:
-                last_online = stat.get("lastOnline", 0)
-                email = stat.get("email")
-                if email and last_online and (current_time_ms - last_online) < online_threshold_ms:
-                    online_client_emails.add(email)
+        # Count clients that are ACTUALLY online (lastOnline within 2 minutes)
+        current_time_ms = time.time() * 1000
+        online_threshold_ms = 2 * 60 * 1000  # 2 minutes in milliseconds
 
-            # Count enabled vs online
-            enabled_clients = sum(1 for c in clients if c.get("enable", True))
-            online_clients = len(online_client_emails)
+        online_client_emails = set()
+        for stat in client_stats:
+            last_online = stat.get("lastOnline", 0)
+            email = stat.get("email")
+            if email and last_online and (current_time_ms - last_online) < online_threshold_ms:
+                online_client_emails.add(email)
 
-            result["total_clients"] = total_clients
-            result["enabled_clients"] = enabled_clients
-            result["online_clients"] = online_clients
+        # Count enabled vs online
+        enabled_clients = sum(1 for c in clients if c.get("enable", True))
+        online_clients = len(online_client_emails)
+
+        result["total_clients"] = total_clients
+        result["enabled_clients"] = enabled_clients
+        result["online_clients"] = online_clients
 
     except Exception:
         pass
@@ -1479,69 +1412,38 @@ async def test_node(request: Request, node_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Node not found")
 
     try:
-        session = requests.Session()
-
-        # Test login
-        login_response = session.post(
-            f"{node.url}/login",
-            data={"username": node.username, "password": node.password},
-            verify=False,
-            timeout=10
-        )
-
-        if login_response.status_code != 200:
-            return {
-                "success": False,
-                "message": f"Login failed (HTTP {login_response.status_code})"
-            }
+        # Use XUIClient for proper CSRF support (v2.8.x and v3.x compatible)
+        xui = await async_get_xui_client(node)
 
         # Get inbounds
-        inbounds_response = session.get(
-            f"{node.url}/panel/api/inbounds/list",
-            verify=False,
-            timeout=10
-        )
+        inbounds = await async_xui_call(xui, 'get_inbounds')
 
-        if inbounds_response.status_code != 200:
+        # Count VLESS inbounds and clients
+        vless_inbounds = [ib for ib in inbounds if ib.get("protocol") == "vless"]
+
+        if not vless_inbounds:
             return {
                 "success": False,
-                "message": f"Failed to get inbounds (HTTP {inbounds_response.status_code})"
+                "message": "No VLESS inbounds found"
             }
 
-        inbounds_data = inbounds_response.json()
-        inbounds = inbounds_data.get("obj", [])
-
-        # Find VLESS-gRPC-Local inbound
-        vless_inbound = None
-        for inbound in inbounds:
-            if inbound.get("remark") == "VLESS-gRPC-Local":
-                vless_inbound = inbound
-                break
-
-        if not vless_inbound:
-            return {
-                "success": False,
-                "message": "VLESS-gRPC-Local inbound not found"
-            }
-
-        # Count clients
-        settings = json.loads(vless_inbound.get("settings", "{}"))
-        clients_count = len(settings.get("clients", []))
+        # Count total clients across all VLESS inbounds
+        total_clients = 0
+        for inbound in vless_inbounds:
+            settings_raw = inbound.get("settings", "{}")
+            settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+            clients = settings.get("clients", [])
+            total_clients += len(clients)
 
         return {
             "success": True,
-            "message": f"Connection successful! Found {clients_count} clients"
+            "message": f"Connection successful! Found {len(vless_inbounds)} VLESS inbound(s) with {total_clients} total clients"
         }
 
-    except requests.exceptions.Timeout:
+    except AuthenticationError as e:
         return {
             "success": False,
-            "message": "Connection timeout"
-        }
-    except requests.exceptions.ConnectionError:
-        return {
-            "success": False,
-            "message": "Connection refused"
+            "message": f"Login failed: {str(e)}"
         }
     except Exception as e:
         return {
@@ -1994,7 +1896,7 @@ async def batch_create_clients(
 
     # Get all enabled nodes
     nodes = db.query(Node).filter(Node.enabled == True).all()
-    subscription_base_url = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+    subscription_base_url = get_subscription_base_url(db)
 
     for i in range(count):
         # Generate random hex suffix to prevent account enumeration
@@ -2118,7 +2020,7 @@ async def disable_client(request: Request, client_id: int, db: Session = Depends
 
 @app.get("/api/clients/{client_id}/limit")
 async def get_client_limit(request: Request, client_id: int, db: Session = Depends(get_db)):
-    """Get IP limit for client from all nodes"""
+    """Get IP limit for client from all nodes (using x-ui-client)"""
     check_auth(request)
 
     try:
@@ -2132,77 +2034,27 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
         if not keys:
             return {"client_id": client_id, "email": client.email, "limit_ip": 0, "nodes": {}, "message": "No keys found"}
 
-        # Collect limitIp from each node/inbound
+        # Collect limitIp from each node using x-ui-client
         limit_values = {}  # {node_name: limit_ip}
 
-        for key in keys:
-            node = db.query(Node).filter(Node.id == key.node_id).first()
+        # Get unique nodes from keys
+        node_ids = list(set(key.node_id for key in keys))
+
+        for node_id in node_ids:
+            node = db.query(Node).filter(Node.id == node_id).first()
             if not node:
                 continue
 
-            session = requests.Session()
             try:
-                # Login to node
-                login_response = session.post(
-                    f"{node.url}/login",
-                    data={"username": node.username, "password": node.password},
-                    verify=False,
-                    timeout=10
-                )
+                # Use x-ui-client library
+                xui = await async_get_xui_client(node)
+                limit_ip = await async_xui_call(xui, 'get_client_ip_limit', client.email)
 
-                if login_response.status_code != 200:
-                    print(f"[IP Limit Check] Login failed for node {node.name}")
-                    continue
+                if limit_ip is not None:
+                    limit_values[node.name] = limit_ip
 
-                # Get all inbounds
-                get_response = session.get(
-                    f"{node.url}/panel/api/inbounds/list",
-                    verify=False,
-                    timeout=30
-                )
-
-                if get_response.status_code != 200:
-                    print(f"[IP Limit Check] Failed to get inbounds on node {node.name}")
-                    continue
-
-                inbounds_data = get_response.json()
-                if not inbounds_data.get("success"):
-                    continue
-
-                # Find the specific inbound
-                inbound = None
-                for ib in inbounds_data.get("obj", []):
-                    if ib.get("id") == key.inbound_id:
-                        inbound = ib
-                        break
-
-                if not inbound:
-                    continue
-
-                settings = json.loads(inbound["settings"])
-                clients_list = settings.get("clients", [])
-
-                # Determine email based on inbound type
-                inbound_remark = inbound.get("remark", "").lower()
-                if "xhttp" in inbound_remark:
-                    search_email = f"{client.email}-xhttp"
-                    transport = "XHTTP"
-                else:
-                    search_email = client.email
-                    transport = "gRPC"
-
-                # Find client and get limitIp
-                for client_obj in clients_list:
-                    if client_obj.get("email") == search_email:
-                        limit_ip = client_obj.get("limitIp", 0)
-                        node_key = f"{node.name} ({transport})"
-                        limit_values[node_key] = limit_ip
-                        break
-
-            except requests.exceptions.RequestException as e:
-                print(f"[IP Limit Check] Connection error for node {node.name}: {e}")
-            finally:
-                session.close()
+            except Exception as e:
+                print(f"[IP Limit Check] Error for node {node.name}: {e}")
 
         # Check for mismatches
         unique_limits = set(limit_values.values())
@@ -2238,7 +2090,7 @@ async def get_client_limit(request: Request, client_id: int, db: Session = Depen
 
 @app.put("/api/clients/{client_id}/limit")
 async def update_client_limit(request: Request, client_id: int, db: Session = Depends(get_db)):
-    """Update IP limit for client on all nodes"""
+    """Update IP limit for client on all nodes (using x-ui-client)"""
     check_auth(request)
 
     # Get request body
@@ -2261,164 +2113,87 @@ async def update_client_limit(request: Request, client_id: int, db: Session = De
     if not keys:
         return {"message": "No keys found for client", "updated_nodes": []}
 
-    # Group keys by (node_id, inbound_id)
-    node_inbound_map = {}
-    for key in keys:
-        key_tuple = (key.node_id, key.inbound_id)
-        if key_tuple not in node_inbound_map:
-            node_inbound_map[key_tuple] = []
-        node_inbound_map[key_tuple].append(key)
-
-    # Update limitIp on each node/inbound
+    # Get unique nodes from keys
+    node_ids = list(set(key.node_id for key in keys))
     results = []
-    requests.packages.urllib3.disable_warnings()
 
-    for (node_id, inbound_id), keys_group in node_inbound_map.items():
+    for node_id in node_ids:
         node = db.query(Node).filter(Node.id == node_id).first()
         if not node:
             results.append({
                 "node_id": node_id,
-                "inbound_id": inbound_id,
                 "success": False,
                 "message": "Node not found"
             })
             continue
 
-        session = requests.Session()
-
         try:
-            # Login to node
-            login_response = session.post(
-                f"{node.url}/login",
-                data={"username": node.username, "password": node.password},
-                verify=False,
-                timeout=10
-            )
-
-            if login_response.status_code != 200:
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": f"Login failed: {login_response.status_code}"
-                })
-                continue
-
-            # Get all inbounds and find the one we need
-            get_response = session.get(
-                f"{node.url}/panel/api/inbounds/list",
-                verify=False,
-                timeout=30
-            )
-
-            if get_response.status_code != 200:
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": f"Failed to get inbounds list: {get_response.status_code}"
-                })
-                continue
-
-            inbounds_data = get_response.json()
-            if not inbounds_data.get("success"):
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": "API returned success=false for inbounds list"
-                })
-                continue
-
-            # Find the specific inbound by ID
-            inbound = None
-            for ib in inbounds_data.get("obj", []):
-                if ib.get("id") == inbound_id:
-                    inbound = ib
-                    break
-
-            if not inbound:
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": f"Inbound {inbound_id} not found in list"
-                })
-                continue
-            settings = json.loads(inbound["settings"])
-            clients_list = settings.get("clients", [])
-
-            # Determine email based on inbound type
-            # gRPC uses client.email, XHTTP uses client.email-xhttp
-            inbound_remark = inbound.get("remark", "").lower()
-            if "xhttp" in inbound_remark:
-                search_email = f"{client.email}-xhttp"
-            else:
-                search_email = client.email
-
-            # Update limitIp for matching client
-            updated_count = 0
-            for client_obj in clients_list:
-                if client_obj.get("email") == search_email:
-                    client_obj["limitIp"] = limit_ip
-                    updated_count += 1
-
-            # Update settings
-            settings["clients"] = clients_list
-            inbound["settings"] = json.dumps(settings)
-
-            # Send update back to node
-            update_response = session.post(
-                f"{node.url}/panel/api/inbounds/update/{inbound_id}",
-                json=inbound,
-                verify=False,
-                timeout=30
-            )
-
-            if update_response.status_code != 200:
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": f"Failed to update inbound: {update_response.status_code}"
-                })
-                continue
-
-            update_data = update_response.json()
-            if not update_data.get("success"):
-                results.append({
-                    "node": node.name,
-                    "inbound_id": inbound_id,
-                    "success": False,
-                    "message": "Update API returned success=false"
-                })
-                continue
+            # Use x-ui-client library
+            xui = await async_get_xui_client(node)
+            success, updated_count = await async_xui_call(xui, 'update_client_ip_limit', client.email, limit_ip)
 
             results.append({
                 "node": node.name,
-                "inbound_id": inbound_id,
-                "success": True,
-                "message": f"Updated {updated_count} clients"
+                "success": success,
+                "message": f"Updated {updated_count} inbounds" if success else "Update failed"
             })
 
         except Exception as e:
             results.append({
-                "node": node.name if node else str(node_id),
-                "inbound_id": inbound_id,
+                "node": node.name,
                 "success": False,
                 "message": str(e)
             })
-        finally:
-            session.close()
 
     success_count = sum(1 for r in results if r.get("success"))
     total_count = len(results)
 
     return {
-        "message": f"Updated IP limit to {limit_ip} on {success_count}/{total_count} node/inbound combinations",
+        "message": f"Updated IP limit to {limit_ip} on {success_count}/{total_count} nodes",
         "limit_ip": limit_ip,
         "results": results
     }
+
+
+@app.delete("/api/clients/zero-keys")
+async def delete_clients_with_zero_keys(request: Request, db: Session = Depends(get_db)):
+    """
+    Delete all clients that have 0 keys.
+
+    This permanently removes clients that have no keys on any node.
+    """
+    check_auth(request)
+
+    try:
+        # Find clients with 0 keys
+        clients = db.query(Client).all()
+        to_delete = []
+
+        for client in clients:
+            key_count = db.query(Key).filter(Key.client_id == client.id).count()
+            if key_count == 0:
+                to_delete.append(client)
+
+        # Delete them
+        deleted_count = len(to_delete)
+        for client in to_delete:
+            db.delete(client)
+
+        db.commit()
+
+        print(f"🗑️  Deleted {deleted_count} clients with 0 keys")
+
+        return {
+            "success": True,
+            "deleted": deleted_count
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
 
 
 @app.delete("/api/clients/{client_id}")
@@ -2512,7 +2287,7 @@ async def get_client_subscription_link(request: Request, client_id: int, db: Ses
     # Get subscription service URL from env
     # SUBSCRIPTION_URL should include /sub path if nginx proxies it
     # Example: SUBSCRIPTION_URL=https://sub.example.com/sub
-    sub_url = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+    sub_url = get_subscription_base_url(db)
 
     return {
         "subscription_url": f"{sub_url}/{client.email}"
@@ -3022,7 +2797,7 @@ async def get_users(request: Request, page: int = 1, limit: int = 50, search: st
 
         # Get associated client info
         if user.client:
-            subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+            subscription_base = get_subscription_base_url(db)
             user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
             user_data["client_email"] = user.client.email
             user_data["client_id"] = user.client.id
@@ -3066,7 +2841,7 @@ async def get_user(request: Request, telegram_id: int, db: Session = Depends(get
 
     # Get associated client info
     if user.client:
-        subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+        subscription_base = get_subscription_base_url(db)
         user_data["subscription_url"] = f"{subscription_base}/{user.client.email}"
         user_data["client_email"] = user.client.email
         user_data["client_id"] = user.client.id
@@ -3134,7 +2909,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
         db.refresh(user)
         db.refresh(client)
 
-        subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+        subscription_base = get_subscription_base_url(db)
 
         return {
             "id": user.id,
@@ -3219,7 +2994,7 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
     db.refresh(user)
     db.refresh(client)
 
-    subscription_base = os.getenv("SUBSCRIPTION_URL", "http://localhost:8001")
+    subscription_base = get_subscription_base_url(db)
 
     return {
         "id": user.id,
@@ -3843,6 +3618,243 @@ async def check_renewals(request: Request, db: Session = Depends(get_db)):
         "disabled": disabled_count,
         "errors": errors if errors else None
     }
+
+
+@app.post("/api/nodes/{node_id}/reset-traffic")
+async def reset_node_traffic(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Reset all traffic counters on a node (does not affect database)"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    try:
+        xui = await async_get_xui_client(node)
+
+        # Use the reset_all_traffic method from x-ui client
+        success = await async_xui_call(xui, 'reset_all_traffic')
+
+        if success:
+            print(f"🔄 Reset all traffic on node {node.name}")
+            return {
+                "success": True,
+                "node": node.name,
+                "message": f"Traffic statistics reset on all inbounds"
+            }
+        else:
+            return {
+                "success": False,
+                "node": node.name,
+                "message": "Failed to reset traffic"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
+
+
+@app.delete("/api/nodes/{node_id}/keys")
+async def delete_all_keys_from_node(
+    request: Request,
+    node_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete ALL keys from a specific node (both from database and from the node itself).
+
+    This is a destructive operation that:
+    1. Deletes all keys from the database for this node
+    2. Deletes all clients from all VLESS inbounds on the node
+
+    Clients remain in the database but lose their keys on this node.
+    """
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    try:
+        # Step 1: Delete keys from database FIRST
+        keys = db.query(Key).filter(Key.node_id == node_id).all()
+        db_keys_count = len(keys)
+
+        for key in keys:
+            db.delete(key)
+
+        db.commit()
+        print(f"🗑️  Deleted {db_keys_count} keys from database for node {node.name}")
+
+        # Step 2: Delete all clients from all VLESS inbounds on the node
+        xui = await async_get_xui_client(node)
+        inbounds = await async_xui_call(xui, 'get_inbounds')
+        vless_inbounds = [ib for ib in inbounds if ib.get("protocol") == "vless"]
+
+        node_clients_deleted = 0
+        inbound_results = []
+
+        for inbound in vless_inbounds:
+            inbound_id = inbound["id"]
+
+            # Use batch delete method to clear all clients from this inbound
+            success, deleted_count = await async_xui_call(
+                xui,
+                'batch_delete_all_clients_from_inbound',
+                inbound_id
+            )
+
+            if success:
+                node_clients_deleted += deleted_count
+
+            inbound_results.append({
+                "inbound_id": inbound_id,
+                "remark": inbound.get("remark", "N/A"),
+                "deleted": deleted_count if success else 0,
+                "success": success
+            })
+
+        print(f"🗑️  Deleted {node_clients_deleted} clients from {len(vless_inbounds)} inbounds on node {node.name}")
+
+        return {
+            "success": True,
+            "node": node.name,
+            "database_keys_deleted": db_keys_count,
+            "node_clients_deleted": node_clients_deleted,
+            "inbounds": inbound_results
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
+
+
+# ============================================================================
+# Subscription Domain Management API
+# ============================================================================
+
+@app.get("/api/subscription-domains")
+async def get_subscription_domains(request: Request, db: Session = Depends(get_db)):
+    """Get all subscription domains"""
+    check_auth(request)
+
+    domains = db.query(SubscriptionDomain).order_by(
+        SubscriptionDomain.is_primary.desc(),
+        SubscriptionDomain.created_at
+    ).all()
+
+    return [{
+        "id": d.id,
+        "domain": d.domain,
+        "enabled": d.enabled,
+        "is_primary": d.is_primary,
+        "notes": d.notes,
+        "created_at": d.created_at.isoformat() if d.created_at else None
+    } for d in domains]
+
+
+@app.post("/api/subscription-domains")
+async def add_subscription_domain(
+    request: Request,
+    domain: str = Form(...),
+    notes: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Add new subscription domain"""
+    check_auth(request)
+
+    # Check if already exists
+    existing = db.query(SubscriptionDomain).filter(SubscriptionDomain.domain == domain).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Domain already exists")
+
+    # If this is the first domain, make it primary
+    is_first = db.query(SubscriptionDomain).count() == 0
+
+    new_domain = SubscriptionDomain(
+        domain=domain,
+        enabled=True,
+        is_primary=is_first,
+        notes=notes
+    )
+
+    db.add(new_domain)
+    db.commit()
+    db.refresh(new_domain)
+
+    return {
+        "success": True,
+        "domain": {
+            "id": new_domain.id,
+            "domain": new_domain.domain,
+            "enabled": new_domain.enabled,
+            "is_primary": new_domain.is_primary
+        }
+    }
+
+
+@app.put("/api/subscription-domains/{domain_id}")
+async def update_subscription_domain(
+    request: Request,
+    domain_id: int,
+    enabled: bool = Form(None),
+    is_primary: bool = Form(None),
+    notes: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Update subscription domain"""
+    check_auth(request)
+
+    domain = db.query(SubscriptionDomain).filter(SubscriptionDomain.id == domain_id).first()
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+
+    # Update fields if provided
+    if enabled is not None:
+        domain.enabled = enabled
+
+    if notes is not None:
+        domain.notes = notes
+
+    # Handle primary domain
+    if is_primary is not None and is_primary:
+        # Unset other primary domains
+        db.query(SubscriptionDomain).filter(
+            SubscriptionDomain.id != domain_id
+        ).update({"is_primary": False})
+        domain.is_primary = True
+
+    db.commit()
+
+    return {"success": True}
+
+
+@app.delete("/api/subscription-domains/{domain_id}")
+async def delete_subscription_domain(
+    request: Request,
+    domain_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete subscription domain"""
+    check_auth(request)
+
+    domain = db.query(SubscriptionDomain).filter(SubscriptionDomain.id == domain_id).first()
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+
+    # Don't allow deleting the last enabled domain
+    enabled_count = db.query(SubscriptionDomain).filter(SubscriptionDomain.enabled == True).count()
+    if domain.enabled and enabled_count <= 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the last enabled domain")
+
+    db.delete(domain)
+    db.commit()
+
+    return {"success": True}
 
 
 if __name__ == "__main__":

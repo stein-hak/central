@@ -295,6 +295,7 @@
             <button class="tab active" onclick="switchTab('nodes')" data-i18n="tab_nodes">Nodes</button>
             <button class="tab" onclick="switchTab('clients')" data-i18n="tab_clients">Clients</button>
             <button class="tab" onclick="switchTab('users')" data-i18n="tab_users">Users</button>
+            <button class="tab" onclick="switchTab('subscription')" data-i18n="tab_subscription">Subscription</button>
             <button class="tab" onclick="switchTab('backups')" data-i18n="tab_backups">Backups</button>
         </div>
 
@@ -399,6 +400,7 @@
                 <h2 data-i18n="clients_list">Clients</h2>
                 <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
                     <input type="text" id="clientSearch" data-i18n-placeholder="search_clients" placeholder="Search by email..." style="flex: 1; max-width: 400px;">
+                    <button class="btn" onclick="deleteClientsWithZeroKeys()" style="background: #e67e22; color: white;" data-i18n="btn_delete_zero_keys">Delete 0-Key Clients</button>
                     <button id="batchDeleteBtn" class="btn btn-danger" onclick="batchDeleteClients()" style="display: none;" data-i18n="btn_delete_selected">Delete Selected</button>
                 </div>
                 <table id="clientsTable">
@@ -499,6 +501,47 @@
         </div>
 
         <!-- Backups Tab -->
+        <!-- Subscription Tab -->
+        <div id="subscription-tab" class="tab-content">
+            <div class="card">
+                <h2 data-i18n="subscription_domains_title">Subscription Domains</h2>
+                <p style="color: #7f8c8d; margin-bottom: 20px;" data-i18n="subscription_domains_description">
+                    Manage domains for your subscription service. When a domain gets blocked, disable it and add a new one.
+                </p>
+
+                <h3 data-i18n="add_subscription_domain">Add New Domain</h3>
+                <form id="addSubscriptionDomainForm" style="margin-bottom: 30px;">
+                    <div class="form-group">
+                        <label data-i18n="domain">Domain</label>
+                        <input type="text" name="domain" required placeholder="sub.example.com or https://sub.example.com">
+                        <small style="color: #7f8c8d; display: block; margin-top: 5px;" data-i18n="domain_help">
+                            Enter domain name or full URL. Will be used for subscription links.
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="notes">Notes (Optional)</label>
+                        <textarea name="notes" rows="2" placeholder="e.g., Cloudflare proxy, Added on 2025-05-27"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" data-i18n="btn_add_domain">Add Domain</button>
+                </form>
+
+                <h3 data-i18n="current_domains">Current Domains</h3>
+                <table id="subscriptionDomainsTable">
+                    <thead>
+                        <tr>
+                            <th data-i18n="th_domain">Domain</th>
+                            <th data-i18n="th_status">Status</th>
+                            <th data-i18n="th_primary">Primary</th>
+                            <th data-i18n="th_notes">Notes</th>
+                            <th data-i18n="th_actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div id="backups-tab" class="tab-content">
             <div class="card">
                 <h2 data-i18n="backups_title">Node Backups</h2>
@@ -760,6 +803,7 @@
                 tab_nodes: 'Nodes',
                 tab_clients: 'Clients',
                 tab_users: 'Users',
+                tab_subscription: 'Subscription',
                 tab_backups: 'Backups',
                 add_node: 'Add New Node',
                 node_name: 'Node Name',
@@ -806,6 +850,9 @@
                 batch_subs_desc: 'Copy these subscription URLs and distribute to clients:',
                 btn_delete: 'Delete',
                 btn_delete_selected: 'Delete Selected',
+                btn_delete_zero_keys: 'Delete 0-Key Clients',
+                btn_delete_all_keys: 'Delete All Keys',
+                btn_reset_traffic: 'Reset Traffic',
                 btn_enable: 'Enable',
                 btn_disable: 'Disable',
                 edit_node: 'Edit Node',
@@ -825,6 +872,15 @@
                 alert_key_deleted: 'Manual key deleted',
                 alert_keys_added: 'keys added',
                 alert_error: 'Error',
+                subscription_domains_title: 'Subscription Domains',
+                subscription_domains_description: 'Manage domains for your subscription service. When a domain gets blocked, disable it and add a new one.',
+                add_subscription_domain: 'Add New Domain',
+                domain_help: 'Enter domain name or full URL. Will be used for subscription links.',
+                current_domains: 'Current Domains',
+                th_primary: 'Primary',
+                btn_add_domain: 'Add Domain',
+                btn_set_primary: 'Set Primary',
+                btn_toggle_status: 'Toggle',
                 backups_title: 'Node Backups',
                 backups_description: 'Create and manage backups of all node databases',
                 btn_create_backup: 'Create New Backup',
@@ -882,6 +938,7 @@
                 tab_nodes: 'Узлы',
                 tab_clients: 'Клиенты',
                 tab_users: 'Пользователи',
+                tab_subscription: 'Подписка',
                 tab_backups: 'Резервные копии',
                 add_node: 'Добавить новый узел',
                 node_name: 'Имя узла',
@@ -928,6 +985,9 @@
                 batch_subs_desc: 'Скопируйте эти URL подписок и раздайте клиентам:',
                 btn_delete: 'Удалить',
                 btn_delete_selected: 'Удалить выбранное',
+                btn_delete_zero_keys: 'Удалить клиентов без ключей',
+                btn_delete_all_keys: 'Удалить все ключи',
+                btn_reset_traffic: 'Сбросить трафик',
                 btn_enable: 'Включить',
                 btn_disable: 'Отключить',
                 edit_node: 'Редактировать узел',
@@ -947,6 +1007,15 @@
                 alert_key_deleted: 'Ручной ключ удален',
                 alert_keys_added: 'ключей добавлено',
                 alert_error: 'Ошибка',
+                subscription_domains_title: 'Домены подписки',
+                subscription_domains_description: 'Управление доменами для сервиса подписок. Когда домен блокируется, отключите его и добавьте новый.',
+                add_subscription_domain: 'Добавить новый домен',
+                domain_help: 'Введите доменное имя или полный URL. Будет использоваться для ссылок подписки.',
+                current_domains: 'Текущие домены',
+                th_primary: 'Основной',
+                btn_add_domain: 'Добавить домен',
+                btn_set_primary: 'Сделать основным',
+                btn_toggle_status: 'Переключить',
                 backups_title: 'Резервные копии узлов',
                 backups_description: 'Создавайте и управляйте резервными копиями баз данных узлов',
                 btn_create_backup: 'Создать новую копию',
@@ -1055,6 +1124,7 @@
             if (tab === 'nodes') loadNodes();
             if (tab === 'clients') loadClients();
             if (tab === 'users') loadUsers();
+            if (tab === 'subscription') loadSubscriptionDomains();
             if (tab === 'backups') loadBackups();
         }
 
@@ -1112,6 +1182,8 @@
                         <button class="btn btn-success" onclick="testNode(${node.id})">${translations[currentLang].btn_test}</button>
                         <button class="btn btn-primary" onclick="editNode(${node.id})">${translations[currentLang].btn_edit}</button>
                         <button class="btn btn-info" onclick="manageDomains(${node.id}, '${node.name}')" style="background: #3498db;">Domains</button>
+                        <button class="btn" onclick="deleteAllKeysFromNode(${node.id}, '${node.name}')" style="background: #e67e22; color: white;" data-i18n="btn_delete_all_keys" title="${translations[currentLang].btn_delete_all_keys}">${translations[currentLang].btn_delete_all_keys}</button>
+                        <button class="btn" onclick="resetNodeTraffic(${node.id}, '${node.name}')" style="background: #9b59b6; color: white;" data-i18n="btn_reset_traffic" title="${translations[currentLang].btn_reset_traffic}">${translations[currentLang].btn_reset_traffic}</button>
                         <button class="btn btn-danger" onclick="deleteNode(${node.id})">${translations[currentLang].btn_delete}</button>
                     </td>
                 `;
@@ -1240,6 +1312,65 @@
             }
 
             loadNodes();
+        }
+
+        // Delete all keys from node
+        async function deleteAllKeysFromNode(nodeId, nodeName) {
+            const confirmMsg = currentLang === 'ru'
+                ? `Удалить ВСЕ ключи с узла "${nodeName}"?\n\nЭто удалит:\n- Все ключи из базы данных для этого узла\n- Всех клиентов со всех VLESS inbound'ов на узле\n\nКлиенты останутся в базе данных, но потеряют свои ключи на этом узле.`
+                : `Delete ALL keys from node "${nodeName}"?\n\nThis will:\n- Delete all keys from database for this node\n- Delete all clients from all VLESS inbounds on the node\n\nClients will remain in database but lose their keys on this node.`;
+
+            if (!confirm(confirmMsg)) return;
+
+            try {
+                const response = await fetch(`/api/nodes/${nodeId}/keys`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const successMsg = currentLang === 'ru'
+                        ? `Ключи удалены!\n\nУдалено из базы данных: ${data.database_keys_deleted} ключей\nУдалено с узла: ${data.node_clients_deleted} клиентов`
+                        : `Keys deleted!\n\nDatabase keys deleted: ${data.database_keys_deleted}\nNode clients deleted: ${data.node_clients_deleted}`;
+                    alert(successMsg);
+                    loadNodes();
+                    loadClients();  // Refresh clients list to show updated key counts
+                } else {
+                    alert(`Error: ${data.message || 'Failed to delete keys'}`);
+                }
+            } catch (error) {
+                alert(`Network error: ${error.message}`);
+            }
+        }
+
+        // Reset traffic on node
+        async function resetNodeTraffic(nodeId, nodeName) {
+            const confirmMsg = currentLang === 'ru'
+                ? `Сбросить весь трафик на узле "${nodeName}"?\n\nЭто обнулит счетчики трафика для всех inbound'ов на узле.`
+                : `Reset all traffic on node "${nodeName}"?\n\nThis will reset traffic counters for all inbounds on the node.`;
+
+            if (!confirm(confirmMsg)) return;
+
+            try {
+                const response = await fetch(`/api/nodes/${nodeId}/reset-traffic`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const successMsg = currentLang === 'ru'
+                        ? `Трафик сброшен!\n\nУзел: ${data.node}`
+                        : `Traffic reset!\n\nNode: ${data.node}`;
+                    alert(successMsg);
+                    loadNodes();  // Refresh to show updated traffic stats
+                } else {
+                    alert(`Error: ${data.message || 'Failed to reset traffic'}`);
+                }
+            } catch (error) {
+                alert(`Network error: ${error.message}`);
+            }
         }
 
         // Load clients
@@ -1411,6 +1542,26 @@
                 btn.textContent = `${translations[currentLang].btn_delete_selected} (${checkboxes.length})`;
             } else {
                 btn.style.display = 'none';
+            }
+        }
+
+        async function deleteClientsWithZeroKeys() {
+            if (!confirm('Delete ALL clients with 0 keys?\n\nThis will permanently remove clients that have no keys on any node.')) {
+                return;
+            }
+
+            const response = await fetch('/api/clients/zero-keys', {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(`Cleanup complete!\n` +
+                    `Deleted ${data.deleted} clients with 0 keys`);
+                loadClients();
+            } else {
+                const error = await response.json();
+                alert(`Error: ${error.detail || 'Failed to delete clients'}`);
             }
         }
 
@@ -2162,6 +2313,127 @@
                 return `⚠ ${translations[currentLang].backup_status_partial}`;
             } else {
                 return `✗ ${translations[currentLang].backup_status_failed}`;
+            }
+        }
+
+        // ============================================================================
+        // Subscription Domains Management
+        // ============================================================================
+
+        async function loadSubscriptionDomains() {
+            const response = await fetch('/api/subscription-domains');
+            const domains = await response.json();
+
+            const tbody = document.querySelector('#subscriptionDomainsTable tbody');
+            tbody.innerHTML = '';
+
+            if (domains.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 20px; color: #7f8c8d;">
+                            No subscription domains configured. Add your first domain above.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            for (const domain of domains) {
+                const tr = document.createElement('tr');
+                const statusBadge = domain.enabled
+                    ? `<span class="badge badge-success">${translations[currentLang].status_enabled}</span>`
+                    : `<span class="badge badge-danger">${translations[currentLang].status_disabled}</span>`;
+
+                const primaryBadge = domain.is_primary
+                    ? `<span class="badge" style="background: #f39c12;">★ Primary</span>`
+                    : `<button class="btn btn-sm" onclick="setPrimaryDomain(${domain.id})" data-i18n="btn_set_primary">${translations[currentLang].btn_set_primary}</button>`;
+
+                tr.innerHTML = `
+                    <td><strong>${domain.domain}</strong></td>
+                    <td>${statusBadge}</td>
+                    <td>${primaryBadge}</td>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${domain.notes || '-'}</td>
+                    <td>
+                        <button class="btn ${domain.enabled ? 'btn-warning' : 'btn-success'}" onclick="toggleDomainStatus(${domain.id}, ${domain.enabled})" data-i18n="btn_toggle_status">
+                            ${domain.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                        <button class="btn btn-danger" onclick="deleteSubscriptionDomain(${domain.id})" data-i18n="btn_delete">Delete</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            }
+        }
+
+        // Add subscription domain form handler
+        document.getElementById('addSubscriptionDomainForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+
+            const response = await fetch('/api/subscription-domains', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(`Domain added: ${data.domain.domain}`);
+                e.target.reset();
+                loadSubscriptionDomains();
+            } else {
+                const error = await response.json();
+                alert(`Error: ${error.detail || 'Failed to add domain'}`);
+            }
+        });
+
+        async function setPrimaryDomain(domainId) {
+            const formData = new FormData();
+            formData.append('is_primary', 'true');
+
+            const response = await fetch(`/api/subscription-domains/${domainId}`, {
+                method: 'PUT',
+                body: formData
+            });
+
+            if (response.ok) {
+                alert('Primary domain updated!');
+                loadSubscriptionDomains();
+            } else {
+                alert('Failed to set primary domain');
+            }
+        }
+
+        async function toggleDomainStatus(domainId, currentStatus) {
+            const formData = new FormData();
+            formData.append('enabled', (!currentStatus).toString());
+
+            const response = await fetch(`/api/subscription-domains/${domainId}`, {
+                method: 'PUT',
+                body: formData
+            });
+
+            if (response.ok) {
+                loadSubscriptionDomains();
+            } else {
+                const error = await response.json();
+                alert(`Error: ${error.detail || 'Failed to toggle status'}`);
+            }
+        }
+
+        async function deleteSubscriptionDomain(domainId) {
+            if (!confirm('Delete this subscription domain?\n\nIf this is the active domain, subscription links will stop working until you enable another domain.')) {
+                return;
+            }
+
+            const response = await fetch(`/api/subscription-domains/${domainId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                alert('Domain deleted!');
+                loadSubscriptionDomains();
+            } else {
+                const error = await response.json();
+                alert(`Error: ${error.detail || 'Failed to delete domain'}`);
             }
         }
 

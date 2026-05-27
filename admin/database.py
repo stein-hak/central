@@ -112,6 +112,19 @@ class NodeDomain(Base):
     node = relationship("Node")
 
 
+class SubscriptionDomain(Base):
+    """Domains for subscription service (to handle blocks/rotation)"""
+    __tablename__ = "subscription_domains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(255), unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=True)
+    is_primary = Column(Boolean, default=False)  # Primary domain used by default
+    notes = Column(Text)  # Optional notes (e.g., "Blocked on 2025-05-27")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def get_db():
     """Dependency to get database session"""
     db = SessionLocal()
