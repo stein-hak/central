@@ -1,0 +1,3 @@
+[submodule "admin/x_ui_client"]
+	path = admin/x_ui_client
+	url = git@github.com:stein-hak/x-ui-client-lib.git
