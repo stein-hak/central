@@ -655,6 +655,181 @@ async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, d
     return processed_results
 
 
+async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict], db: Session, reality_only: bool = False) -> dict:
+    """
+    Batch create multiple clients on a single node in ONE API call.
+
+    Args:
+        node: Node to create clients on
+        clients_data: List of dicts with 'email' and 'uuid' keys
+        db: Database session
+        reality_only: If True, only create on Reality inbounds. If False, create on non-Reality inbounds
+
+    Returns: dict with node info, success status, keys created per client, and any errors
+    """
+    start_time = time.time()
+    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    print(f"  ⏱️  [{node.name}] Starting BATCH creation of {len(clients_data)} clients{filter_msg}...")
+
+    result = {
+        "node_id": node.id,
+        "node_name": node.name,
+        "success": False,
+        "clients_keys": {},  # {email: [list of keys]}
+        "errors": []
+    }
+
+    try:
+        # Get authenticated XUIClient
+        xui = await async_get_xui_client(node)
+
+        # Prepare batch client data for x-ui-client
+        batch_client_data = []
+        for client_info in clients_data:
+            batch_client_data.append({
+                "id": str(client_info["uuid"]),
+                "flow": "",
+                "email": client_info["email"],
+                "limitIp": 0,
+                "totalGB": 0,
+                "expiryTime": 0,
+                "enable": True,
+                "tgId": "",
+                "subId": ""
+            })
+
+        # Batch sync ALL clients to all matching VLESS inbounds in ONE call
+        batch_results = await async_xui_call(
+            xui,
+            'batch_sync_clients_to_all_vless_inbounds',
+            batch_client_data,
+            "_{inbound_id}",
+            reality_only
+        )
+
+        if not batch_results:
+            error_msg = "No VLESS inbounds found"
+            result["errors"].append(error_msg)
+            return result
+
+        # Get inbounds to generate key info
+        inbounds = await async_xui_call(xui, 'get_inbounds')
+        vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
+
+        # For each client, collect keys from each inbound
+        for client_info in clients_data:
+            client_email = client_info["email"]
+            client_uuid = client_info["uuid"]
+            result["clients_keys"][client_email] = []
+
+            for inbound in vless_inbounds:
+                inbound_id = inbound["id"]
+
+                # Check if batch operation succeeded for this inbound
+                if inbound_id not in batch_results:
+                    continue
+
+                success, count = batch_results[inbound_id]
+                if not success:
+                    continue
+
+                # Check Reality filter
+                try:
+                    stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                    is_reality = stream_settings.get("security") == "reality"
+
+                    # Skip if doesn't match reality_only filter
+                    if reality_only and not is_reality:
+                        continue
+                    if not reality_only and is_reality:
+                        continue
+                except:
+                    if reality_only:
+                        continue
+
+                # Determine transport type
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    transport = "xhttp"
+                elif "grpc" in inbound_remark:
+                    transport = "grpc"
+                elif "tcp" in inbound_remark:
+                    transport = "tcp"
+                else:
+                    transport = "grpc"
+
+                # Parse stream settings
+                stream_settings_dict = None
+                try:
+                    stream_settings_dict = json.loads(inbound.get("streamSettings", "{}")) if inbound.get("streamSettings") else None
+                except:
+                    pass
+
+                result["clients_keys"][client_email].append({
+                    "uuid": str(client_uuid),
+                    "transport": transport.upper(),
+                    "email": f"{client_email}_{inbound_id}",
+                    "inbound_id": inbound_id,
+                    "stream_settings": stream_settings_dict
+                })
+
+        # Success if at least one client got keys
+        result["success"] = any(len(keys) > 0 for keys in result["clients_keys"].values())
+        total_keys = sum(len(keys) for keys in result["clients_keys"].values())
+
+    except Exception as e:
+        result["errors"].append(f"Exception: {str(e)}")
+
+    elapsed = time.time() - start_time
+    status = "✅" if result["success"] else "❌"
+    total_keys = sum(len(keys) for keys in result["clients_keys"].values())
+    print(f"  {status} [{node.name}] Completed in {elapsed:.2f}s - {total_keys} keys created for {len(clients_data)} clients")
+
+    return result
+
+
+async def async_batch_create_clients_on_all_nodes(nodes: List[Node], clients_data: List[dict], db: Session, reality_only: bool = False) -> List[dict]:
+    """
+    Batch create multiple clients on all nodes in parallel.
+    Each node receives ALL clients in ONE batch API call.
+
+    Args:
+        nodes: List of nodes to create clients on
+        clients_data: List of dicts with 'email' and 'uuid' keys
+        db: Database session
+        reality_only: If True, only create on Reality inbounds. If False, create on non-Reality inbounds
+
+    Returns: List of results from each node
+    """
+    start_time = time.time()
+    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    print(f"\n🚀 BATCH creating {len(clients_data)} clients on {len(nodes)} nodes IN PARALLEL{filter_msg}...")
+
+    tasks = [async_batch_create_clients_on_node(node, clients_data, db, reality_only) for node in nodes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Convert exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "node_id": nodes[i].id,
+                "node_name": nodes[i].name,
+                "success": False,
+                "clients_keys": {},
+                "errors": [f"Task exception: {str(result)}"]
+            })
+        else:
+            processed_results.append(result)
+
+    elapsed = time.time() - start_time
+    success_count = sum(1 for r in processed_results if r["success"])
+    total_keys = sum(sum(len(keys) for keys in r["clients_keys"].values()) for r in processed_results)
+    print(f"✨ TOTAL: {success_count}/{len(nodes)} nodes succeeded, {total_keys} keys created for {len(clients_data)} clients in {elapsed:.2f}s\n")
+
+    return processed_results
+
+
 async def async_delete_client_from_node(node: Node, client: Client, db: Session) -> dict:
     """
     Delete client from a single node (async version).
@@ -1898,9 +2073,12 @@ async def batch_create_clients(
     nodes = db.query(Node).filter(Node.enabled == True).all()
     subscription_base_url = get_subscription_base_url(db)
 
+    # Step 1: Create ALL clients in database first
+    clients_data = []
+    clients_db = []
+
     for i in range(count):
         # Generate random hex suffix to prevent account enumeration
-        # Example: client-a3f9b2e1, client-7d2c8f4a
         random_suffix = secrets.token_hex(4)  # 8 hex characters
         email = f"{seed}-{random_suffix}"
 
@@ -1910,28 +2088,47 @@ async def batch_create_clients(
             failed_count += 1
             continue
 
-        # Create client
+        # Create client in database
         client = Client(email=email, enabled=True)
         db.add(client)
         db.commit()
         db.refresh(client)
 
-        # Sync to all enabled nodes IN PARALLEL with reality_only flag
-        if nodes:
-            node_results = await async_create_keys_on_all_nodes(nodes, email, db, reality_only=reality_only)
+        # Generate UUID for this client
+        client_uuid = str(uuid.uuid4())
 
-            # Save keys to database
-            for result in node_results:
-                if result["success"]:
-                    for key_info in result["keys"]:
+        clients_data.append({
+            "email": email,
+            "uuid": client_uuid
+        })
+        clients_db.append(client)
+        created_count += 1
+
+    # Step 2: Batch create ALL clients on ALL nodes in parallel (ONE API call per node)
+    if nodes and clients_data:
+        node_results = await async_batch_create_clients_on_all_nodes(nodes, clients_data, db, reality_only=reality_only)
+
+        # Step 3: Save keys to database
+        for result in node_results:
+            if result["success"]:
+                node_obj = db.query(Node).get(result["node_id"])
+
+                # Process each client's keys
+                for client_email, keys in result["clients_keys"].items():
+                    # Find the client DB object
+                    client = next((c for c in clients_db if c.email == client_email), None)
+                    if not client:
+                        continue
+
+                    for key_info in keys:
                         key = Key(
                             client_id=client.id,
                             node_id=result["node_id"],
                             inbound_id=key_info["inbound_id"],
                             uuid=key_info["uuid"],
                             vless_url=create_vless_url(
-                                db.query(Node).get(result["node_id"]),
-                                email,
+                                node_obj,
+                                client_email,
                                 key_info["uuid"],
                                 key_info["inbound_id"],
                                 key_info["transport"].lower(),
@@ -1943,16 +2140,15 @@ async def batch_create_clients(
                         db.add(key)
                         total_synced += 1
 
-            db.commit()
+        db.commit()
 
-        # Add subscription URL
-        subscription_url = f"{subscription_base_url}/{email}"
+    # Generate subscription URLs
+    for client in clients_db:
+        subscription_url = f"{subscription_base_url}/{client.email}"
         subscription_urls.append({
-            "email": email,
+            "email": client.email,
             "url": subscription_url
         })
-
-        created_count += 1
 
     return {
         "created": created_count,
