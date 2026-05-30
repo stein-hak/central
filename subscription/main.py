@@ -26,6 +26,9 @@ PROFILE_TITLE = os.getenv("PROFILE_TITLE", "VPN Service")
 # Get profile update interval from environment (in hours)
 PROFILE_UPDATE_INTERVAL = os.getenv("PROFILE_UPDATE_INTERVAL", "3")
 
+# Enable auto-ping on app open (Happ feature)
+ENABLE_PING_ON_OPEN = os.getenv("ENABLE_PING_ON_OPEN", "false").lower() in ("true", "1", "yes")
+
 
 def get_client_ip(request: Request) -> str:
     """
@@ -334,6 +337,10 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         # Suggest filename for download
         "content-disposition": f'attachment; filename="{client_email}.txt"'
     }
+
+    # Add optional Happ auto-ping header if enabled
+    if ENABLE_PING_ON_OPEN:
+        headers["subscription-ping-onopen-enabled"] = "1"
 
     # Add routing rules for specific test users (client-aware routing)
     if client_email in ["stein", "Client-40337230"]:
