@@ -1179,6 +1179,7 @@
                     <td>${trafficHtml}</td>
                     <td><span class="badge badge-${node.enabled ? 'success' : 'danger'}">${statusText}</span>${upgradedBadge}</td>
                     <td>
+                        <button class="btn ${node.enabled ? 'btn-warning' : 'btn-success'}" onclick="toggleNode(${node.id}, '${node.name}', ${node.enabled})">${node.enabled ? translations[currentLang].btn_disable : translations[currentLang].btn_enable}</button>
                         <button class="btn btn-success" onclick="testNode(${node.id})">${translations[currentLang].btn_test}</button>
                         <button class="btn btn-primary" onclick="editNode(${node.id})">${translations[currentLang].btn_edit}</button>
                         <button class="btn btn-info" onclick="manageDomains(${node.id}, '${node.name}')" style="background: #3498db;">Domains</button>
@@ -1297,6 +1298,28 @@
         }
 
         // Delete node
+        async function toggleNode(id, name, currentlyEnabled) {
+            const action = currentlyEnabled ? translations[currentLang].btn_disable : translations[currentLang].btn_enable;
+            const confirmMsg = currentLang === 'ru'
+                ? `${action} узел "${name}"?`
+                : `${action} node "${name}"?`;
+
+            if (!confirm(confirmMsg)) return;
+
+            const response = await fetch(`/api/nodes/${id}/toggle`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const status = data.enabled ? translations[currentLang].status_enabled : translations[currentLang].status_disabled;
+                alert(`Node ${status.toLowerCase()}`);
+                loadNodes();
+            } else {
+                alert('Failed to toggle node');
+            }
+        }
+
         async function deleteNode(id) {
             if (!confirm(translations[currentLang].confirm_delete_node)) return;
 

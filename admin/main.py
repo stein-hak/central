@@ -1577,6 +1577,23 @@ async def update_node(
     return {"id": node.id, "name": node.name, "url": node.url, "domain": node.domain}
 
 
+@app.post("/api/nodes/{node_id}/toggle")
+async def toggle_node(request: Request, node_id: int, db: Session = Depends(get_db)):
+    """Toggle node enabled/disabled status"""
+    check_auth(request)
+
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    # Toggle the enabled status
+    node.enabled = not node.enabled
+    db.commit()
+    db.refresh(node)
+
+    return {"id": node.id, "name": node.name, "enabled": node.enabled}
+
+
 @app.post("/api/nodes/{node_id}/test")
 async def test_node(request: Request, node_id: int, db: Session = Depends(get_db)):
     """Test node connection and credentials"""
