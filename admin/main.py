@@ -484,7 +484,7 @@ def delete_client_from_node(node: Node, client: Client, db: Session):
 # Async Node Operations (Parallel)
 # ============================================================================
 
-async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: str, db: Session, reality_only: bool = False) -> dict:
+async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: str, db: Session, reality_only: bool = True) -> dict:
     """
     Create keys for a client on a single node (async version).
 
@@ -610,7 +610,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
     return result
 
 
-async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session, reality_only: bool = False) -> List[dict]:
+async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, db: Session, reality_only: bool = True) -> List[dict]:
     """
     Create keys for a client on all nodes in parallel.
     Generates ONE UUID for the client to use across ALL nodes and inbounds.
@@ -655,7 +655,7 @@ async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, d
     return processed_results
 
 
-async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict], db: Session, reality_only: bool = False) -> dict:
+async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict], db: Session, reality_only: bool = True) -> dict:
     """
     Batch create multiple clients on a single node in ONE API call.
 
@@ -788,7 +788,7 @@ async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict
     return result
 
 
-async def async_batch_create_clients_on_all_nodes(nodes: List[Node], clients_data: List[dict], db: Session, reality_only: bool = False) -> List[dict]:
+async def async_batch_create_clients_on_all_nodes(nodes: List[Node], clients_data: List[dict], db: Session, reality_only: bool = True) -> List[dict]:
     """
     Batch create multiple clients on all nodes in parallel.
     Each node receives ALL clients in ONE batch API call.
@@ -1944,7 +1944,7 @@ async def create_client(
     request: Request,
     email: str = Form(...),
     manual_keys: str = Form(default=""),
-    reality_only: bool = Form(default=False),
+    reality_only: bool = Form(default=True),
     db: Session = Depends(get_db)
 ):
     """Create new client and sync to all nodes
@@ -1952,7 +1952,7 @@ async def create_client(
     Args:
         email: Client email
         manual_keys: Optional manual VLESS URLs (newline separated)
-        reality_only: If True, create keys only on Reality inbounds. If False (default), create on legacy non-Reality inbounds
+        reality_only: If True (default), create keys only on Reality inbounds. If False, create on legacy non-Reality inbounds
     """
     check_auth(request)
 
@@ -2066,7 +2066,7 @@ async def batch_create_clients(
     request: Request,
     seed: str = Form(...),
     count: int = Form(...),
-    reality_only: bool = Form(default=False),
+    reality_only: bool = Form(default=True),
     db: Session = Depends(get_db)
 ):
     """Batch create clients with pattern: seed-{random_hex}
@@ -2074,7 +2074,7 @@ async def batch_create_clients(
     Args:
         seed: Base name for clients (e.g., "client")
         count: Number of clients to create (1-100)
-        reality_only: If True, create keys only on Reality inbounds. If False (default), create on legacy non-Reality inbounds
+        reality_only: If True (default), create keys only on Reality inbounds. If False, create on legacy non-Reality inbounds
     """
     check_auth(request)
 
@@ -2683,8 +2683,8 @@ async def recreate_client_on_nodes(
         if existing_key and existing_key.vless_url:
             reality_only_bool = "security=reality" in existing_key.vless_url
         else:
-            # Default to legacy (non-Reality) if no existing keys
-            reality_only_bool = False
+            # Default to Reality if no existing keys
+            reality_only_bool = True
 
     # Delete all existing auto-generated keys for this client
     db.query(Key).filter(

@@ -825,6 +825,139 @@
         </div>
     </div>
 
+    <!-- Add Proxy Modal -->
+    <div id="addProxyModal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <span data-i18n="add_proxy_title">Add Proxy Server</span>
+                <span onclick="closeAddProxyModal()" style="float: right; cursor: pointer; font-size: 24px; font-weight: bold; color: #999; line-height: 1;">&times;</span>
+            </div>
+            <form id="addProxyForm" onsubmit="addProxy(event)">
+                <div class="form-group">
+                    <label data-i18n="proxy_name">Name</label>
+                    <input type="text" name="name" required placeholder="US-Server" style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_domain">Domain</label>
+                    <input type="text" name="domain" required placeholder="phone-bliss.tech" style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_fake_snis">Fake SNIs (comma-separated)</label>
+                    <input type="text" name="fake_snis" placeholder="vk.com,mail.ru,ok.ru" style="width: 100%;">
+                    <small style="color: #7f8c8d; display: block; margin-top: 5px;">Popular domains to hide real backend in TLS handshake</small>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_strategy">SNI Selection Strategy</label>
+                    <select name="sni_strategy" style="width: 100%; padding: 8px;">
+                        <option value="random">Random (consistent per node)</option>
+                        <option value="fixed">Fixed (always first)</option>
+                        <option value="rotate">Rotate (daily)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="enabled" checked> Enabled
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="notes">Notes</label>
+                    <textarea name="notes" rows="3" style="width: 100%;"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Proxy</button>
+                <button type="button" class="btn" onclick="closeAddProxyModal()">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Proxy Modal -->
+    <div id="editProxyModal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <span data-i18n="edit_proxy_title">Edit Proxy Server</span>
+                <span onclick="closeEditProxyModal()" style="float: right; cursor: pointer; font-size: 24px; font-weight: bold; color: #999; line-height: 1;">&times;</span>
+            </div>
+            <form id="editProxyForm" onsubmit="updateProxy(event)">
+                <input type="hidden" id="editProxyId" name="proxy_id">
+                <div class="form-group">
+                    <label data-i18n="proxy_name">Name</label>
+                    <input type="text" id="editProxyName" name="name" required style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_domain">Domain</label>
+                    <input type="text" id="editProxyDomain" name="domain" required style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_fake_snis">Fake SNIs (comma-separated)</label>
+                    <input type="text" id="editProxyFakeSnis" name="fake_snis" style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_strategy">SNI Selection Strategy</label>
+                    <select id="editProxyStrategy" name="sni_strategy" style="width: 100%; padding: 8px;">
+                        <option value="random">Random (consistent per node)</option>
+                        <option value="fixed">Fixed (always first)</option>
+                        <option value="rotate">Rotate (daily)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="editProxyEnabled" name="enabled"> Enabled
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="notes">Notes</label>
+                    <textarea id="editProxyNotes" name="notes" rows="3" style="width: 100%;"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Update Proxy</button>
+                <button type="button" class="btn" onclick="closeEditProxyModal()">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Manage Backends Modal -->
+    <div id="backendsModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <span>Manage Backends - <span id="backendProxyName"></span></span>
+                <span onclick="closeBackendsModal()" style="float: right; cursor: pointer; font-size: 24px; font-weight: bold; color: #999; line-height: 1;">&times;</span>
+            </div>
+            <div style="padding: 20px;">
+                <div class="card" style="margin-bottom: 20px;">
+                    <h3>Add Backend Node</h3>
+                    <form id="addBackendForm" onsubmit="addBackend(event)">
+                        <input type="hidden" id="backendProxyId" name="proxy_id">
+                        <div class="form-group">
+                            <label>Select Node</label>
+                            <select name="node_id" id="backendNodeSelect" required style="width: 100%; padding: 8px;">
+                                <option value="">-- Select Node --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Weight (Load Balancing)</label>
+                            <input type="number" name="weight" value="1" min="1" required style="width: 100%;">
+                            <small style="color: #7f8c8d;">Higher weight = more traffic</small>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" name="enabled" checked> Enabled
+                            </label>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add Backend</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h3>Current Backends</h3>
+                    <div id="backendsList">
+                        <div style="text-align: center; padding: 20px; color: #7f8c8d;">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeBackendsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Translations
         const translations = {
@@ -2550,16 +2683,179 @@
             }
         }
 
+        // Proxy Modal Functions
         function showAddProxyModal() {
-            alert('Proxy management UI is under development. Please use API for now:\n\nPOST /api/proxies\n-F "name=US-Server"\n-F "domain=phone-bliss.tech"\n-F "fake_snis=vk.com,mail.ru"\n\nSee docs/proxy-api-reference.md for details.');
+            document.getElementById('addProxyModal').classList.add('active');
         }
 
-        function editProxy(id) {
-            alert('Edit proxy UI coming soon. Use PUT /api/proxies/' + id);
+        function closeAddProxyModal() {
+            document.getElementById('addProxyModal').classList.remove('active');
+            document.getElementById('addProxyForm').reset();
         }
 
-        function manageBackends(id, name) {
-            alert('Backend management UI coming soon for proxy: ' + name + '\n\nUse POST /api/proxies/' + id + '/backends');
+        async function addProxy(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+
+            try {
+                const response = await fetch('/api/proxies', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('Failed to create proxy');
+
+                await loadProxies();
+                closeAddProxyModal();
+                alert('Proxy created successfully');
+            } catch (error) {
+                alert('Error creating proxy: ' + error.message);
+            }
+        }
+
+        async function editProxy(id) {
+            try {
+                const response = await fetch(`/api/proxies`);
+                if (!response.ok) throw new Error('Failed to load proxies');
+
+                const proxies = await response.json();
+                const proxy = proxies.find(p => p.id === id);
+
+                if (!proxy) throw new Error('Proxy not found');
+
+                document.getElementById('editProxyId').value = proxy.id;
+                document.getElementById('editProxyName').value = proxy.name;
+                document.getElementById('editProxyDomain').value = proxy.domain;
+                document.getElementById('editProxyFakeSnis').value = proxy.fake_snis.join(', ');
+                document.getElementById('editProxyStrategy').value = proxy.sni_strategy;
+                document.getElementById('editProxyEnabled').checked = proxy.enabled;
+                document.getElementById('editProxyNotes').value = proxy.notes || '';
+
+                document.getElementById('editProxyModal').classList.add('active');
+            } catch (error) {
+                alert('Error loading proxy: ' + error.message);
+            }
+        }
+
+        function closeEditProxyModal() {
+            document.getElementById('editProxyModal').classList.remove('active');
+        }
+
+        async function updateProxy(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const proxyId = formData.get('proxy_id');
+
+            try {
+                const response = await fetch(`/api/proxies/${proxyId}`, {
+                    method: 'PUT',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('Failed to update proxy');
+
+                await loadProxies();
+                closeEditProxyModal();
+                alert('Proxy updated successfully');
+            } catch (error) {
+                alert('Error updating proxy: ' + error.message);
+            }
+        }
+
+        async function manageBackends(id, name) {
+            document.getElementById('backendProxyId').value = id;
+            document.getElementById('backendProxyName').textContent = name;
+
+            // Load available nodes for select
+            try {
+                const nodesResponse = await fetch('/api/nodes');
+                const nodes = await nodesResponse.json();
+
+                const select = document.getElementById('backendNodeSelect');
+                select.innerHTML = '<option value="">-- Select Node --</option>';
+                nodes.forEach(node => {
+                    select.innerHTML += `<option value="${node.id}">${node.name}</option>`;
+                });
+
+                // Load current backends
+                await loadBackends(id);
+
+                document.getElementById('backendsModal').classList.add('active');
+            } catch (error) {
+                alert('Error loading backends: ' + error.message);
+            }
+        }
+
+        function closeBackendsModal() {
+            document.getElementById('backendsModal').classList.remove('active');
+            document.getElementById('addBackendForm').reset();
+        }
+
+        async function loadBackends(proxyId) {
+            try {
+                const response = await fetch(`/api/proxies/${proxyId}/backends`);
+                if (!response.ok) throw new Error('Failed to load backends');
+
+                const backends = await response.json();
+                const backendsList = document.getElementById('backendsList');
+
+                if (backends.length === 0) {
+                    backendsList.innerHTML = '<div style="text-align: center; padding: 20px; color: #7f8c8d;">No backends configured</div>';
+                    return;
+                }
+
+                backendsList.innerHTML = backends.map(backend => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #ecf0f1;">
+                        <div>
+                            <strong>${backend.node.name}</strong>
+                            <small style="color: #7f8c8d; margin-left: 10px;">Weight: ${backend.weight}</small>
+                            ${backend.enabled ? '<span class="badge" style="background: #27ae60; margin-left: 10px;">Enabled</span>' : '<span class="badge" style="background: #e74c3c; margin-left: 10px;">Disabled</span>'}
+                        </div>
+                        <button class="btn btn-sm btn-danger" onclick="deleteBackend(${backend.id}, ${proxyId}, '${backend.node.name}')">Remove</button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                document.getElementById('backendsList').innerHTML =
+                    '<div style="text-align: center; padding: 20px; color: #e74c3c;">Error loading backends</div>';
+            }
+        }
+
+        async function addBackend(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const proxyId = formData.get('proxy_id');
+
+            try {
+                const response = await fetch(`/api/proxies/${proxyId}/backends`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('Failed to add backend');
+
+                await loadBackends(proxyId);
+                event.target.reset();
+                alert('Backend added successfully');
+            } catch (error) {
+                alert('Error adding backend: ' + error.message);
+            }
+        }
+
+        async function deleteBackend(backendId, proxyId, nodeName) {
+            if (!confirm(`Remove backend "${nodeName}"?`)) return;
+
+            try {
+                const response = await fetch(`/api/proxies/${proxyId}/backends/${backendId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Failed to delete backend');
+
+                await loadBackends(proxyId);
+                alert('Backend removed successfully');
+            } catch (error) {
+                alert('Error deleting backend: ' + error.message);
+            }
         }
 
         async function deleteProxy(id, name) {
@@ -2621,6 +2917,27 @@
                 const domainsModal = document.getElementById('domainsModal');
                 if (domainsModal && domainsModal.classList.contains('active')) {
                     closeDomainsModal();
+                    return;
+                }
+
+                // Close Add Proxy Modal
+                const addProxyModal = document.getElementById('addProxyModal');
+                if (addProxyModal && addProxyModal.classList.contains('active')) {
+                    closeAddProxyModal();
+                    return;
+                }
+
+                // Close Edit Proxy Modal
+                const editProxyModal = document.getElementById('editProxyModal');
+                if (editProxyModal && editProxyModal.classList.contains('active')) {
+                    closeEditProxyModal();
+                    return;
+                }
+
+                // Close Backends Modal
+                const backendsModal = document.getElementById('backendsModal');
+                if (backendsModal && backendsModal.classList.contains('active')) {
+                    closeBackendsModal();
                     return;
                 }
             }
