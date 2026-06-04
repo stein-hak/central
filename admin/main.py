@@ -572,23 +572,26 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                 if reality_only:
                     continue
 
-            # Determine transport type
-            inbound_remark = inbound.get("remark", "").lower()
-            if "xhttp" in inbound_remark:
-                transport = "xhttp"
-            elif "grpc" in inbound_remark:
-                transport = "grpc"
-            elif "tcp" in inbound_remark:
-                transport = "tcp"
-            else:
-                transport = "grpc"
-
-            # Parse stream settings
+            # Parse stream settings first to get transport
             stream_settings_dict = None
             try:
                 stream_settings_dict = json.loads(inbound.get("streamSettings", "{}")) if inbound.get("streamSettings") else None
             except:
                 pass
+
+            # Determine transport type from stream settings or remark
+            transport = "grpc"  # default
+            if stream_settings_dict and "network" in stream_settings_dict:
+                transport = stream_settings_dict["network"]
+            else:
+                # Fallback to remark-based detection
+                inbound_remark = inbound.get("remark", "").lower()
+                if "xhttp" in inbound_remark:
+                    transport = "xhttp"
+                elif "grpc" in inbound_remark:
+                    transport = "grpc"
+                elif "tcp" in inbound_remark:
+                    transport = "tcp"
 
             result["keys"].append({
                 "uuid": str(client_uuid),
