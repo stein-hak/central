@@ -243,13 +243,41 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
         # Otherwise keep as "tls"
 
     if transport == "xhttp":
-        # XHTTP transport: type=xhttp, path=/api
+        # XHTTP transport: extract settings from stream settings
+        xhttp_settings = stream_settings.get("xhttpSettings", {}) if stream_settings else {}
+
+        # Basic parameters
         params = {
+            "type": "xhttp",
             "encryption": "none",
             "security": security,
-            "type": "xhttp",
-            "path": "/api"
+            "path": xhttp_settings.get("path", "/api"),
+            "host": xhttp_settings.get("host", ""),
+            "mode": xhttp_settings.get("mode", "auto")
         }
+
+        # Add XHTTP obfuscation parameters if present
+        x_padding = xhttp_settings.get("xPaddingBytes", "")
+        sc_max_bytes = xhttp_settings.get("scMaxEachPostBytes", "")
+
+        if x_padding or sc_max_bytes:
+            # Build extra JSON for advanced clients
+            import json as json_module
+            extra_obj = {}
+            if xhttp_settings.get("mode"):
+                extra_obj["mode"] = xhttp_settings["mode"]
+            if sc_max_bytes:
+                extra_obj["scMaxEachPostBytes"] = str(sc_max_bytes)
+            if x_padding:
+                extra_obj["xPaddingBytes"] = str(x_padding)
+
+            if extra_obj:
+                params["extra"] = json_module.dumps(extra_obj)
+
+            # Also add x_padding_bytes as separate parameter for compatibility
+            if x_padding:
+                params["x_padding_bytes"] = str(x_padding)
+
         protocol_label = "XHTTP"
     else:
         # gRPC transport: type=grpc, serviceName from settings or default
@@ -302,10 +330,23 @@ def create_vless_url(node: Node, client_email: str, client_uuid: str, inbound_id
     # Build query string (order matters for some clients)
     if security == "reality":
         # Reality: specific order for compatibility
+        # For XHTTP: type, encryption, extra, mode, path, host, security, pbk, fp, sni, sid, spx, x_padding_bytes
+        # For gRPC: type, encryption, serviceName, authority, security, pbk, fp, sni, sid, spx
         query_parts = []
-        for key in ["type", "encryption", "serviceName", "authority", "security", "pbk", "fp", "sni", "sid", "spx"]:
-            if key in params and params[key]:
-                query_parts.append(f"{key}={urllib.parse.quote(str(params[key]))}")
+        if transport == "xhttp":
+            # XHTTP parameter order
+            for key in ["type", "encryption", "extra", "mode", "path", "host", "security", "pbk", "fp", "sni", "sid", "spx", "x_padding_bytes"]:
+                if key in params and params[key] != "":
+                    # For extra parameter, it's already JSON string, no need to quote again
+                    if key == "extra":
+                        query_parts.append(f"{key}={urllib.parse.quote(params[key])}")
+                    else:
+                        query_parts.append(f"{key}={urllib.parse.quote(str(params[key]))}")
+        else:
+            # gRPC parameter order
+            for key in ["type", "encryption", "serviceName", "authority", "security", "pbk", "fp", "sni", "sid", "spx"]:
+                if key in params and params[key]:
+                    query_parts.append(f"{key}={urllib.parse.quote(str(params[key]))}")
         query_string = "&".join(query_parts)
     else:
         # TLS: standard encoding
