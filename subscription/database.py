@@ -1,6 +1,6 @@
 """Read-only database access for subscription service"""
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -21,8 +21,10 @@ class Node(Base):
     domain = Column(String(255))
     enabled = Column(Boolean)
     upgraded = Column(Boolean)  # True if node has synced clients (uses HA ports)
+    proxy_only = Column(Boolean)  # If True, only show through proxy
 
     keys = relationship("Key", back_populates="node")
+    proxy_backends = relationship("ProxyBackend", back_populates="node")
 
 
 class Client(Base):
@@ -70,6 +72,34 @@ class NodeDomain(Base):
 
     domain = relationship("Domain")
     node = relationship("Node")
+
+
+class Proxy(Base):
+    """HAProxy front-end servers for client access"""
+    __tablename__ = "proxies"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255))
+    domain = Column(String(255))
+    fake_snis = Column(ARRAY(Text))
+    sni_strategy = Column(String(20))
+    enabled = Column(Boolean)
+
+    proxy_backends = relationship("ProxyBackend", back_populates="proxy")
+
+
+class ProxyBackend(Base):
+    """Many-to-many: which backend nodes are behind which proxies"""
+    __tablename__ = "proxy_backends"
+
+    id = Column(Integer, primary_key=True)
+    proxy_id = Column(Integer, ForeignKey("proxies.id"))
+    node_id = Column(Integer, ForeignKey("nodes.id"))
+    weight = Column(Integer)
+    enabled = Column(Boolean)
+
+    proxy = relationship("Proxy", back_populates="proxy_backends")
+    node = relationship("Node", back_populates="proxy_backends")
 
 
 def get_db():

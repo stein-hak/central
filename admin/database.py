@@ -1,6 +1,6 @@
 """Database models and connection for admin service"""
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Date, BigInteger
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Date, BigInteger, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -33,9 +33,11 @@ class Node(Base):
     password = Column(String(255), nullable=False)
     enabled = Column(Boolean, default=True)
     upgraded = Column(Boolean, default=False)  # True if node has synced clients (uses HA ports)
+    proxy_only = Column(Boolean, default=False)  # If True, only show through proxy (hide direct access)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     keys = relationship("Key", back_populates="node", cascade="all, delete-orphan")
+    proxy_backends = relationship("ProxyBackend", back_populates="node", cascade="all, delete-orphan")
 
 
 class User(Base):
@@ -123,6 +125,37 @@ class SubscriptionDomain(Base):
     notes = Column(Text)  # Optional notes (e.g., "Blocked on 2025-05-27")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Proxy(Base):
+    """HAProxy front-end servers for client access"""
+    __tablename__ = "proxies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)
+    domain = Column(String(255), nullable=False)
+    fake_snis = Column(ARRAY(Text))  # Array of fake SNI domains
+    sni_strategy = Column(String(20), default='random')  # random | fixed | rotate
+    enabled = Column(Boolean, default=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    proxy_backends = relationship("ProxyBackend", back_populates="proxy", cascade="all, delete-orphan")
+
+
+class ProxyBackend(Base):
+    """Many-to-many: which backend nodes are behind which proxies"""
+    __tablename__ = "proxy_backends"
+
+    id = Column(Integer, primary_key=True, index=True)
+    proxy_id = Column(Integer, ForeignKey("proxies.id", ondelete="CASCADE"), nullable=False)
+    node_id = Column(Integer, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
+    weight = Column(Integer, default=1)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    proxy = relationship("Proxy", back_populates="proxy_backends")
+    node = relationship("Node", back_populates="proxy_backends")
 
 
 def get_db():

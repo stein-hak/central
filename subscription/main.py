@@ -9,7 +9,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from database import get_db, Client, Key, Node, Domain, NodeDomain
+from database import get_db, Client, Key, Node, Domain, NodeDomain, Proxy, ProxyBackend
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +52,130 @@ def get_client_ip(request: Request) -> str:
 
     # Fallback to direct connection IP
     return request.client.host if request.client else "Unknown"
+
+
+def select_fake_sni(proxy: Proxy, node_id: int = None) -> str:
+    """
+    Select fake SNI based on proxy strategy
+
+    Args:
+        proxy: Proxy object with fake_snis and sni_strategy
+        node_id: Optional node ID for consistent selection
+
+    Returns:
+        Selected fake SNI domain
+    """
+    if not proxy.fake_snis or len(proxy.fake_snis) == 0:
+        # No fake SNIs configured - use proxy domain
+        return proxy.domain
+
+    if proxy.sni_strategy == 'fixed':
+        # Always use first SNI
+        return proxy.fake_snis[0]
+
+    elif proxy.sni_strategy == 'rotate':
+        # Rotate based on day of year
+        from datetime import datetime
+        day_of_year = datetime.now().timetuple().tm_yday
+        index = day_of_year % len(proxy.fake_snis)
+        return proxy.fake_snis[index]
+
+    else:  # 'random' or default
+        # Random selection
+        # If node_id provided, use it for consistent randomization per node
+        if node_id:
+            index = node_id % len(proxy.fake_snis)
+            return proxy.fake_snis[index]
+        else:
+            return random.choice(proxy.fake_snis)
+
+
+def regenerate_url_with_proxy(original_url: str, proxy_domain: str, proxy_name: str, fake_sni: str) -> str:
+    """
+    Regenerate VLESS URL with proxy domain and fake SNI
+
+    Args:
+        original_url: Original VLESS URL from node
+        proxy_domain: Proxy domain (e.g., phone-bliss.tech)
+        proxy_name: Proxy display name (e.g., US-Server)
+        fake_sni: Fake SNI domain for obfuscation (e.g., vk.com)
+
+    Returns:
+        New VLESS URL with proxy settings
+    """
+    if not original_url.startswith('vless://'):
+        return original_url
+
+    try:
+        # Extract UUID
+        uuid = original_url.split('://')[1].split('@')[0]
+
+        # Extract query params
+        after_at = original_url.split('@', 1)[1]
+
+        # Determine transport
+        transport = "gRPC"
+        if 'type=xhttp' in original_url or 'type=splithttp' in original_url:
+            transport = "XHTTP"
+        elif 'type=tcp' in original_url:
+            transport = "TCP"
+
+        # Extract query string and old remark
+        if '?' in after_at:
+            query_and_remark = after_at.split('?', 1)[1]
+            if '#' in query_and_remark:
+                query_string, old_remark = query_and_remark.split('#', 1)
+            else:
+                query_string = query_and_remark
+                old_remark = ""
+        else:
+            query_string = ""
+            old_remark = after_at.split('#')[1] if '#' in after_at else ""
+
+        # Extract email from old remark
+        email = ""
+        if '-' in old_remark and '@' in old_remark:
+            # Format: node-name-TRANSPORT-email
+            parts = old_remark.split('-')
+            if len(parts) >= 3:
+                email = '-'.join(parts[2:])  # Everything after transport
+
+        # Build new remark with proxy name
+        new_remark = f"{proxy_name}-{transport}"
+        if email:
+            new_remark += f"-{email}"
+
+        # Replace or add SNI parameter in query string
+        params = []
+        sni_replaced = False
+
+        if query_string:
+            for param in query_string.split('&'):
+                if param.startswith('sni='):
+                    # Replace existing SNI
+                    params.append(f"sni={fake_sni}")
+                    sni_replaced = True
+                else:
+                    params.append(param)
+
+        # Add SNI if not replaced
+        if not sni_replaced:
+            params.append(f"sni={fake_sni}")
+
+        query_string = '&'.join(params)
+
+        # Build new URL
+        new_url = f"vless://{uuid}@{proxy_domain}:443"
+        if query_string:
+            new_url += f"?{query_string}"
+        if new_remark:
+            new_url += f"#{new_remark}"
+
+        return new_url
+
+    except Exception as e:
+        logger.error(f"Failed to regenerate URL with proxy: {e}")
+        return original_url
 
 
 def add_standard_alpn(vless_url: str) -> str:
@@ -238,38 +362,61 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     # Get deduplicated keys
     keys = list(keys_by_node_transport.values())
 
-    # Generate multi-domain URLs for each key
-    # Check if nodes have multiple domains configured and generate additional URLs
+    # Generate URLs for each key
+    # Priority: proxy URLs first, then direct URLs (if not proxy_only)
     all_vless_urls = []
 
     for key in keys:
-        # Get ALL domains for this node (including primary)
-        # IMPORTANT: Only include enabled nodes to filter out deleted/disabled nodes
-        node_domains = db.query(NodeDomain, Domain, Node).join(
-            Domain, NodeDomain.domain_id == Domain.id
-        ).join(
-            Node, NodeDomain.node_id == Node.id
-        ).filter(
-            NodeDomain.node_id == key.node_id,
-            NodeDomain.enabled == True,
-            Domain.enabled == True,
-            Node.enabled == True  # Filter out disabled nodes
-        ).order_by(NodeDomain.is_primary.desc()).all()  # Primary first
+        # Get node info
+        node = db.query(Node).filter(Node.id == key.node_id, Node.enabled == True).first()
 
-        # Skip this key if node is disabled/deleted (no domains found)
-        if not node_domains:
-            # Don't include URLs for disabled/deleted nodes
+        if not node:
+            # Skip disabled nodes
             continue
 
-        # Generate URLs for all configured domains (primary + additional)
-        for nd, domain, node in node_domains:
-            regenerated_url = regenerate_url_with_domain(
+        # Check if node is behind any proxies
+        proxy_backends = db.query(ProxyBackend, Proxy).join(
+            Proxy, ProxyBackend.proxy_id == Proxy.id
+        ).filter(
+            ProxyBackend.node_id == key.node_id,
+            ProxyBackend.enabled == True,
+            Proxy.enabled == True
+        ).all()
+
+        # Generate proxy URLs (if node is behind proxies)
+        for pb, proxy in proxy_backends:
+            # Select fake SNI based on strategy
+            fake_sni = select_fake_sni(proxy, key.node_id)
+
+            # Generate URL with proxy domain and fake SNI
+            proxy_url = regenerate_url_with_proxy(
                 original_url=key.vless_url,
-                new_domain=domain.domain,
-                node_upgraded=node.upgraded or False,
-                display_name=nd.display_name
+                proxy_domain=proxy.domain,
+                proxy_name=proxy.name,
+                fake_sni=fake_sni
             )
-            all_vless_urls.append(regenerated_url)
+            all_vless_urls.append(proxy_url)
+
+        # Generate direct URLs (if node is not proxy_only)
+        if not node.proxy_only:
+            # Get ALL domains for this node (including primary)
+            node_domains = db.query(NodeDomain, Domain).join(
+                Domain, NodeDomain.domain_id == Domain.id
+            ).filter(
+                NodeDomain.node_id == key.node_id,
+                NodeDomain.enabled == True,
+                Domain.enabled == True
+            ).order_by(NodeDomain.is_primary.desc()).all()  # Primary first
+
+            # Generate URLs for all configured domains (primary + additional)
+            for nd, domain in node_domains:
+                regenerated_url = regenerate_url_with_domain(
+                    original_url=key.vless_url,
+                    new_domain=domain.domain,
+                    node_upgraded=node.upgraded or False,
+                    display_name=nd.display_name
+                )
+                all_vless_urls.append(regenerated_url)
 
     # Build subscription content (one URL per line)
     # Group URLs by country, XHTTP first within each group, then randomize groups

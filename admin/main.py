@@ -20,7 +20,7 @@ import asyncio
 from x_ui_client import XUIClient
 from x_ui_client.exceptions import AuthenticationError, APIError
 
-from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, SubscriptionDomain, engine, Base
+from database import get_db, Node, Client, Key, User, PaymentStatus, Domain, NodeDomain, SubscriptionDomain, Proxy, ProxyBackend, engine, Base
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -4065,6 +4065,270 @@ async def delete_subscription_domain(
         raise HTTPException(status_code=400, detail="Cannot delete the last enabled domain")
 
     db.delete(domain)
+    db.commit()
+
+    return {"success": True}
+
+
+# ============================================================================
+# Proxy Management API
+# ============================================================================
+
+@app.get("/api/proxies")
+async def get_proxies(request: Request, db: Session = Depends(get_db)):
+    """Get all proxies with their backend nodes"""
+    check_auth(request)
+
+    proxies = db.query(Proxy).all()
+
+    result = []
+    for proxy in proxies:
+        # Get backend nodes for this proxy
+        backends = db.query(ProxyBackend, Node).join(
+            Node, ProxyBackend.node_id == Node.id
+        ).filter(
+            ProxyBackend.proxy_id == proxy.id
+        ).all()
+
+        backend_list = [
+            {
+                "id": pb.id,
+                "node_id": node.id,
+                "node_name": node.name,
+                "weight": pb.weight,
+                "enabled": pb.enabled
+            }
+            for pb, node in backends
+        ]
+
+        result.append({
+            "id": proxy.id,
+            "name": proxy.name,
+            "domain": proxy.domain,
+            "fake_snis": proxy.fake_snis or [],
+            "sni_strategy": proxy.sni_strategy,
+            "enabled": proxy.enabled,
+            "notes": proxy.notes,
+            "backends": backend_list,
+            "created_at": proxy.created_at.isoformat() if proxy.created_at else None
+        })
+
+    return result
+
+
+@app.post("/api/proxies")
+async def create_proxy(
+    request: Request,
+    name: str = Form(...),
+    domain: str = Form(...),
+    fake_snis: str = Form(""),  # Comma-separated list
+    sni_strategy: str = Form("random"),
+    enabled: bool = Form(True),
+    notes: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    """Create a new proxy"""
+    check_auth(request)
+
+    # Check if proxy name already exists
+    existing = db.query(Proxy).filter(Proxy.name == name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Proxy with this name already exists")
+
+    # Parse fake SNIs
+    fake_snis_list = []
+    if fake_snis:
+        fake_snis_list = [s.strip() for s in fake_snis.split(",") if s.strip()]
+
+    # Create proxy
+    proxy = Proxy(
+        name=name,
+        domain=domain,
+        fake_snis=fake_snis_list,
+        sni_strategy=sni_strategy,
+        enabled=enabled,
+        notes=notes
+    )
+
+    db.add(proxy)
+    db.commit()
+    db.refresh(proxy)
+
+    return {
+        "success": True,
+        "proxy": {
+            "id": proxy.id,
+            "name": proxy.name,
+            "domain": proxy.domain,
+            "fake_snis": proxy.fake_snis or [],
+            "sni_strategy": proxy.sni_strategy,
+            "enabled": proxy.enabled
+        }
+    }
+
+
+@app.put("/api/proxies/{proxy_id}")
+async def update_proxy(
+    request: Request,
+    proxy_id: int,
+    name: str = Form(...),
+    domain: str = Form(...),
+    fake_snis: str = Form(""),
+    sni_strategy: str = Form("random"),
+    enabled: bool = Form(True),
+    notes: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    """Update proxy"""
+    check_auth(request)
+
+    proxy = db.query(Proxy).filter(Proxy.id == proxy_id).first()
+    if not proxy:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    # Check name uniqueness (excluding current proxy)
+    existing = db.query(Proxy).filter(
+        Proxy.name == name,
+        Proxy.id != proxy_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Proxy with this name already exists")
+
+    # Parse fake SNIs
+    fake_snis_list = []
+    if fake_snis:
+        fake_snis_list = [s.strip() for s in fake_snis.split(",") if s.strip()]
+
+    # Update proxy
+    proxy.name = name
+    proxy.domain = domain
+    proxy.fake_snis = fake_snis_list
+    proxy.sni_strategy = sni_strategy
+    proxy.enabled = enabled
+    proxy.notes = notes
+
+    db.commit()
+
+    return {"success": True}
+
+
+@app.delete("/api/proxies/{proxy_id}")
+async def delete_proxy(request: Request, proxy_id: int, db: Session = Depends(get_db)):
+    """Delete proxy (cascade deletes proxy_backends)"""
+    check_auth(request)
+
+    proxy = db.query(Proxy).filter(Proxy.id == proxy_id).first()
+    if not proxy:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    db.delete(proxy)
+    db.commit()
+
+    return {"success": True}
+
+
+@app.get("/api/proxies/{proxy_id}/backends")
+async def get_proxy_backends(request: Request, proxy_id: int, db: Session = Depends(get_db)):
+    """Get backend nodes for a proxy"""
+    check_auth(request)
+
+    proxy = db.query(Proxy).filter(Proxy.id == proxy_id).first()
+    if not proxy:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    backends = db.query(ProxyBackend, Node).join(
+        Node, ProxyBackend.node_id == Node.id
+    ).filter(
+        ProxyBackend.proxy_id == proxy_id
+    ).all()
+
+    return [
+        {
+            "id": pb.id,
+            "node_id": node.id,
+            "node_name": node.name,
+            "weight": pb.weight,
+            "enabled": pb.enabled,
+            "created_at": pb.created_at.isoformat() if pb.created_at else None
+        }
+        for pb, node in backends
+    ]
+
+
+@app.post("/api/proxies/{proxy_id}/backends")
+async def add_proxy_backend(
+    request: Request,
+    proxy_id: int,
+    node_id: int = Form(...),
+    weight: int = Form(1),
+    enabled: bool = Form(True),
+    db: Session = Depends(get_db)
+):
+    """Add a backend node to proxy"""
+    check_auth(request)
+
+    # Check proxy exists
+    proxy = db.query(Proxy).filter(Proxy.id == proxy_id).first()
+    if not proxy:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    # Check node exists
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    # Check if already exists
+    existing = db.query(ProxyBackend).filter(
+        ProxyBackend.proxy_id == proxy_id,
+        ProxyBackend.node_id == node_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Node already added to this proxy")
+
+    # Add backend
+    backend = ProxyBackend(
+        proxy_id=proxy_id,
+        node_id=node_id,
+        weight=weight,
+        enabled=enabled
+    )
+
+    db.add(backend)
+    db.commit()
+    db.refresh(backend)
+
+    return {
+        "success": True,
+        "backend": {
+            "id": backend.id,
+            "proxy_id": proxy_id,
+            "node_id": node_id,
+            "node_name": node.name,
+            "weight": weight,
+            "enabled": enabled
+        }
+    }
+
+
+@app.delete("/api/proxies/{proxy_id}/backends/{backend_id}")
+async def remove_proxy_backend(
+    request: Request,
+    proxy_id: int,
+    backend_id: int,
+    db: Session = Depends(get_db)
+):
+    """Remove a backend node from proxy"""
+    check_auth(request)
+
+    backend = db.query(ProxyBackend).filter(
+        ProxyBackend.id == backend_id,
+        ProxyBackend.proxy_id == proxy_id
+    ).first()
+
+    if not backend:
+        raise HTTPException(status_code=404, detail="Backend not found")
+
+    db.delete(backend)
     db.commit()
 
     return {"success": True}
