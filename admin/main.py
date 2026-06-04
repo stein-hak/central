@@ -544,15 +544,21 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
         inbounds = await async_xui_call(xui, 'get_inbounds')
         vless_inbounds = [inbound for inbound in inbounds if inbound.get("protocol") == "vless"]
 
+        print(f"    DEBUG: Found {len(vless_inbounds)} VLESS inbounds")
+        print(f"    DEBUG: batch_results = {batch_results}")
+
         # Filter by reality_only flag
         for idx, inbound in enumerate(vless_inbounds):
             inbound_id = inbound["id"]
+            print(f"    DEBUG: Processing inbound {inbound_id}")
 
             # Check if batch operation succeeded for this inbound
             if inbound_id not in batch_results:
+                print(f"    DEBUG: Inbound {inbound_id} NOT in batch_results, skipping")
                 continue
 
             success, count = batch_results[inbound_id]
+            print(f"    DEBUG: Inbound {inbound_id} batch result: success={success}, count={count}")
             if not success:
                 result["errors"].append(f"Failed to sync to inbound {inbound_id}")
                 continue
@@ -561,14 +567,18 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
             try:
                 stream_settings = json.loads(inbound.get("streamSettings", "{}"))
                 is_reality = stream_settings.get("security") == "reality"
+                print(f"    DEBUG: Inbound {inbound_id} is_reality={is_reality}, reality_only={reality_only}")
 
                 # Skip if doesn't match reality_only filter
                 if reality_only and not is_reality:
+                    print(f"    DEBUG: Skipping inbound {inbound_id} - reality_only=True but is_reality=False")
                     continue
                 if not reality_only and is_reality:
+                    print(f"    DEBUG: Skipping inbound {inbound_id} - reality_only=False but is_reality=True")
                     continue
-            except:
+            except Exception as e:
                 # If can't parse, treat as non-Reality
+                print(f"    DEBUG: Failed to parse streamSettings for inbound {inbound_id}: {e}")
                 if reality_only:
                     continue
 
@@ -593,6 +603,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                 elif "tcp" in inbound_remark:
                     transport = "tcp"
 
+            print(f"    DEBUG: Adding key for inbound {inbound_id}, transport={transport}")
             result["keys"].append({
                 "uuid": str(client_uuid),
                 "transport": transport.upper(),
