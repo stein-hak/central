@@ -1522,12 +1522,13 @@ async def update_node(
     username: str = Form(...),
     password: str = Form(...),
     upgraded: str = Form("false"),
+    proxy_only: str = Form("false"),
     db: Session = Depends(get_db)
 ):
     """Update node"""
     check_auth(request)
 
-    print(f"[UPDATE NODE] ID: {node_id}, upgraded: '{upgraded}' (type: {type(upgraded)})")
+    print(f"[UPDATE NODE] ID: {node_id}, upgraded: '{upgraded}', proxy_only: '{proxy_only}'")
 
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
@@ -1550,8 +1551,9 @@ async def update_node(
     node.username = username
     node.password = password
     node.upgraded = upgraded.lower() in ('true', '1', 'yes', 'on')
+    node.proxy_only = proxy_only.lower() in ('true', '1', 'yes', 'on')
 
-    print(f"[UPDATE NODE] Changed upgraded: {old_upgraded} -> {node.upgraded}")
+    print(f"[UPDATE NODE] Changed upgraded: {old_upgraded} -> {node.upgraded}, proxy_only: {node.proxy_only}")
 
     # Handle domain change in multi-domain tables
     if old_domain != domain:

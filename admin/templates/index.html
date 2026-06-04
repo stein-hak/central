@@ -656,6 +656,10 @@
                     <input type="checkbox" id="editNodeUpgraded" style="width: auto; margin: 0;">
                     <label for="editNodeUpgraded" style="margin: 0; cursor: pointer;">Upgraded (uses HAProxy with HA ports)</label>
                 </div>
+                <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="editNodeProxyOnly" style="width: auto; margin: 0;">
+                    <label for="editNodeProxyOnly" style="margin: 0; cursor: pointer;">Proxy Only (hide direct node URLs from subscription)</label>
+                </div>
                 <div class="modal-footer">
                     <button type="submit" class="btn btn-primary" data-i18n="btn_save">Save</button>
                     <button type="button" class="btn" onclick="closeEditNodeModal()" data-i18n="btn_cancel">Cancel</button>
@@ -1416,6 +1420,7 @@
             document.getElementById('editNodeUsername').value = node.username;
             document.getElementById('editNodePassword').value = node.password;
             document.getElementById('editNodeUpgraded').checked = node.upgraded || false;
+            document.getElementById('editNodeProxyOnly').checked = node.proxy_only || false;
 
             document.getElementById('editNodeModal').classList.add('active');
         }
@@ -1430,8 +1435,9 @@
 
             const id = document.getElementById('editNodeId').value;
             const upgraded = document.getElementById('editNodeUpgraded').checked;
+            const proxyOnly = document.getElementById('editNodeProxyOnly').checked;
 
-            console.log('Updating node:', id, 'upgraded:', upgraded);
+            console.log('Updating node:', id, 'upgraded:', upgraded, 'proxy_only:', proxyOnly);
 
             const formData = new FormData();
             formData.append('name', document.getElementById('editNodeName').value);
@@ -1440,6 +1446,7 @@
             formData.append('username', document.getElementById('editNodeUsername').value);
             formData.append('password', document.getElementById('editNodePassword').value);
             formData.append('upgraded', upgraded ? 'true' : 'false');
+            formData.append('proxy_only', proxyOnly ? 'true' : 'false');
 
             try {
                 const response = await fetch(`/api/nodes/${id}`, {
