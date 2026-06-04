@@ -565,7 +565,13 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
 
             # Check Reality filter
             try:
-                stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                stream_settings_raw = inbound.get("streamSettings", "{}")
+                # streamSettings can be either string or dict depending on API version
+                if isinstance(stream_settings_raw, str):
+                    stream_settings = json.loads(stream_settings_raw)
+                else:
+                    stream_settings = stream_settings_raw
+
                 is_reality = stream_settings.get("security") == "reality"
                 print(f"    DEBUG: Inbound {inbound_id} is_reality={is_reality}, reality_only={reality_only}")
 
@@ -582,12 +588,8 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                 if reality_only:
                     continue
 
-            # Parse stream settings first to get transport
-            stream_settings_dict = None
-            try:
-                stream_settings_dict = json.loads(inbound.get("streamSettings", "{}")) if inbound.get("streamSettings") else None
-            except:
-                pass
+            # Use already parsed stream_settings as stream_settings_dict
+            stream_settings_dict = stream_settings
 
             # Determine transport type from stream settings or remark
             transport = "grpc"  # default
