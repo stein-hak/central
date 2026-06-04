@@ -2807,11 +2807,11 @@
                 backendsList.innerHTML = backends.map(backend => `
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #ecf0f1;">
                         <div>
-                            <strong>${backend.node.name}</strong>
+                            <strong>${backend.node_name}</strong>
                             <small style="color: #7f8c8d; margin-left: 10px;">Weight: ${backend.weight}</small>
                             ${backend.enabled ? '<span class="badge" style="background: #27ae60; margin-left: 10px;">Enabled</span>' : '<span class="badge" style="background: #e74c3c; margin-left: 10px;">Disabled</span>'}
                         </div>
-                        <button class="btn btn-sm btn-danger" onclick="deleteBackend(${backend.id}, ${proxyId}, '${backend.node.name}')">Remove</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteBackend(${backend.id}, ${proxyId}, '${backend.node_name}')">Remove</button>
                     </div>
                 `).join('');
             } catch (error) {
