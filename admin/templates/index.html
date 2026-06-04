@@ -293,6 +293,7 @@
     <div class="container">
         <div class="tabs">
             <button class="tab active" onclick="switchTab('nodes')" data-i18n="tab_nodes">Nodes</button>
+            <button class="tab" onclick="switchTab('proxies')" data-i18n="tab_proxies">Proxies</button>
             <button class="tab" onclick="switchTab('clients')" data-i18n="tab_clients">Clients</button>
             <button class="tab" onclick="switchTab('users')" data-i18n="tab_users">Users</button>
             <button class="tab" onclick="switchTab('subscription')" data-i18n="tab_subscription">Subscription</button>
@@ -345,6 +346,36 @@
                     <tbody>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Proxies Tab -->
+        <div id="proxies-tab" class="tab-content">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 data-i18n="proxies_title">Proxy Servers</h2>
+                    <button class="btn" onclick="showAddProxyModal()" data-i18n="btn_add_proxy">Add Proxy</button>
+                </div>
+                <div class="table-container">
+                    <table id="proxiesTable">
+                        <thead>
+                            <tr>
+                                <th data-i18n="proxy_name">Name</th>
+                                <th data-i18n="proxy_domain">Domain</th>
+                                <th data-i18n="proxy_fake_snis">Fake SNIs</th>
+                                <th data-i18n="proxy_strategy">Strategy</th>
+                                <th data-i18n="proxy_backends">Backends</th>
+                                <th data-i18n="proxy_status">Status</th>
+                                <th data-i18n="actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="proxiesTableBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; padding: 40px;" data-i18n="loading">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -801,6 +832,15 @@
                 title: 'Subscription Manager',
                 logout: 'Logout',
                 tab_nodes: 'Nodes',
+                tab_proxies: 'Proxies',
+                proxies_title: 'Proxy Servers',
+                btn_add_proxy: 'Add Proxy',
+                proxy_name: 'Name',
+                proxy_domain: 'Domain',
+                proxy_fake_snis: 'Fake SNIs',
+                proxy_strategy: 'Strategy',
+                proxy_backends: 'Backends',
+                proxy_status: 'Status',
                 tab_clients: 'Clients',
                 tab_users: 'Users',
                 tab_subscription: 'Subscription',
@@ -936,6 +976,15 @@
                 title: 'Менеджер подписок',
                 logout: 'Выход',
                 tab_nodes: 'Узлы',
+                tab_proxies: 'Прокси',
+                proxies_title: 'Прокси-серверы',
+                btn_add_proxy: 'Добавить прокси',
+                proxy_name: 'Название',
+                proxy_domain: 'Домен',
+                proxy_fake_snis: 'Фальшивые SNI',
+                proxy_strategy: 'Стратегия',
+                proxy_backends: 'Бэкенды',
+                proxy_status: 'Статус',
                 tab_clients: 'Клиенты',
                 tab_users: 'Пользователи',
                 tab_subscription: 'Подписка',
@@ -1122,6 +1171,7 @@
             document.getElementById(tab + '-tab').classList.add('active');
 
             if (tab === 'nodes') loadNodes();
+            if (tab === 'proxies') loadProxies();
             if (tab === 'clients') loadClients();
             if (tab === 'users') loadUsers();
             if (tab === 'subscription') loadSubscriptionDomains();
@@ -2457,6 +2507,72 @@
             } else {
                 const error = await response.json();
                 alert(`Error: ${error.detail || 'Failed to delete domain'}`);
+            }
+        }
+
+        // Proxies Management
+        async function loadProxies() {
+            try {
+                const response = await fetch('/api/proxies');
+                if (!response.ok) throw new Error('Failed to load proxies');
+
+                const proxies = await response.json();
+                const tbody = document.getElementById('proxiesTableBody');
+
+                if (proxies.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px;">No proxies configured. Click "Add Proxy" to create one.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = proxies.map(proxy => `
+                    <tr>
+                        <td><strong>${proxy.name}</strong></td>
+                        <td><code>${proxy.domain}</code></td>
+                        <td><small>${proxy.fake_snis.join(', ') || '-'}</small></td>
+                        <td><span class="badge">${proxy.sni_strategy}</span></td>
+                        <td>${proxy.backends.length} nodes</td>
+                        <td>
+                            <span class="status ${proxy.enabled ? 'online' : 'offline'}">
+                                ${proxy.enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                        </td>
+                        <td>
+                            <button class="btn btn-sm" onclick="editProxy(${proxy.id})" style="background: #3498db;">Edit</button>
+                            <button class="btn btn-sm" onclick="manageBackends(${proxy.id}, '${proxy.name}')" style="background: #9b59b6;">Backends</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteProxy(${proxy.id}, '${proxy.name}')">Delete</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading proxies:', error);
+                document.getElementById('proxiesTableBody').innerHTML =
+                    '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #e74c3c;">Error loading proxies</td></tr>';
+            }
+        }
+
+        function showAddProxyModal() {
+            alert('Proxy management UI is under development. Please use API for now:\n\nPOST /api/proxies\n-F "name=US-Server"\n-F "domain=phone-bliss.tech"\n-F "fake_snis=vk.com,mail.ru"\n\nSee docs/proxy-api-reference.md for details.');
+        }
+
+        function editProxy(id) {
+            alert('Edit proxy UI coming soon. Use PUT /api/proxies/' + id);
+        }
+
+        function manageBackends(id, name) {
+            alert('Backend management UI coming soon for proxy: ' + name + '\n\nUse POST /api/proxies/' + id + '/backends');
+        }
+
+        async function deleteProxy(id, name) {
+            if (!confirm(`Delete proxy "${name}"?\n\nThis will also remove all backend associations.`)) return;
+
+            try {
+                const response = await fetch(`/api/proxies/${id}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to delete proxy');
+
+                await loadProxies();
+                alert('Proxy deleted successfully');
+            } catch (error) {
+                alert('Error deleting proxy: ' + error.message);
             }
         }
 
