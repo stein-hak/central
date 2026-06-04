@@ -792,7 +792,13 @@ async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict
 
                 # Check Reality filter
                 try:
-                    stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                    stream_settings_raw = inbound.get("streamSettings", "{}")
+                    # streamSettings can be either string or dict depending on API version
+                    if isinstance(stream_settings_raw, str):
+                        stream_settings = json.loads(stream_settings_raw)
+                    else:
+                        stream_settings = stream_settings_raw
+
                     is_reality = stream_settings.get("security") == "reality"
 
                     # Skip if doesn't match reality_only filter
@@ -804,21 +810,22 @@ async def async_batch_create_clients_on_node(node: Node, clients_data: List[dict
                     if reality_only:
                         continue
 
-                # Determine transport type
-                inbound_remark = inbound.get("remark", "").lower()
-                if "xhttp" in inbound_remark:
-                    transport = "xhttp"
-                elif "grpc" in inbound_remark:
-                    transport = "grpc"
-                elif "tcp" in inbound_remark:
-                    transport = "tcp"
+                # Determine transport type from stream settings first
+                stream_settings_dict = stream_settings
+                transport = "grpc"  # default
+                if stream_settings_dict and "network" in stream_settings_dict:
+                    transport = stream_settings_dict["network"]
                 else:
-                    transport = "grpc"
+                    # Fallback to remark-based detection
+                    inbound_remark = inbound.get("remark", "").lower()
+                    if "xhttp" in inbound_remark:
+                        transport = "xhttp"
+                    elif "tcp" in inbound_remark:
+                        transport = "tcp"
 
-                # Parse stream settings
-                stream_settings_dict = None
+                # stream_settings_dict already set above
                 try:
-                    stream_settings_dict = json.loads(inbound.get("streamSettings", "{}")) if inbound.get("streamSettings") else None
+                    pass
                 except:
                     pass
 
