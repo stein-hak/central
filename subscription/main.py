@@ -366,6 +366,44 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     # Priority: proxy URLs first, then direct URLs (if not proxy_only)
     all_vless_urls = []
 
+    # First, generate proxy URLs (one per proxy, not per node)
+    # Get all enabled proxies with backends
+    all_proxies = db.query(Proxy).filter(Proxy.enabled == True).all()
+    generated_proxy_ids = set()
+
+    for proxy in all_proxies:
+        if proxy.id in generated_proxy_ids:
+            continue
+
+        # Get first enabled backend node for this proxy
+        backend = db.query(ProxyBackend).join(
+            Node, ProxyBackend.node_id == Node.id
+        ).filter(
+            ProxyBackend.proxy_id == proxy.id,
+            ProxyBackend.enabled == True,
+            Node.enabled == True
+        ).first()
+
+        if not backend:
+            continue
+
+        # Find a key for this backend node
+        key = next((k for k in keys if k.node_id == backend.node_id), None)
+        if not key:
+            continue
+
+        # Generate one proxy URL
+        fake_sni = select_fake_sni(proxy, backend.node_id)
+        proxy_url = regenerate_url_with_proxy(
+            original_url=key.vless_url,
+            proxy_domain=proxy.domain,
+            proxy_name=proxy.name,
+            fake_sni=fake_sni
+        )
+        all_vless_urls.append(proxy_url)
+        generated_proxy_ids.add(proxy.id)
+
+    # Then, generate direct URLs for each node (if not proxy_only)
     for key in keys:
         # Get node info
         node = db.query(Node).filter(Node.id == key.node_id, Node.enabled == True).first()
@@ -373,29 +411,6 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         if not node:
             # Skip disabled nodes
             continue
-
-        # Check if node is behind any proxies
-        proxy_backends = db.query(ProxyBackend, Proxy).join(
-            Proxy, ProxyBackend.proxy_id == Proxy.id
-        ).filter(
-            ProxyBackend.node_id == key.node_id,
-            ProxyBackend.enabled == True,
-            Proxy.enabled == True
-        ).all()
-
-        # Generate proxy URLs (if node is behind proxies)
-        for pb, proxy in proxy_backends:
-            # Select fake SNI based on strategy
-            fake_sni = select_fake_sni(proxy, key.node_id)
-
-            # Generate URL with proxy domain and fake SNI
-            proxy_url = regenerate_url_with_proxy(
-                original_url=key.vless_url,
-                proxy_domain=proxy.domain,
-                proxy_name=proxy.name,
-                fake_sni=fake_sni
-            )
-            all_vless_urls.append(proxy_url)
 
         # Generate direct URLs (if node is not proxy_only)
         if not node.proxy_only:
