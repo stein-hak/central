@@ -364,6 +364,7 @@
                                 <th data-i18n="proxy_domain">Domain</th>
                                 <th data-i18n="proxy_fake_snis">Fake SNIs</th>
                                 <th data-i18n="proxy_strategy">Strategy</th>
+                                <th data-i18n="proxy_transport">Transport</th>
                                 <th data-i18n="proxy_backends">Backends</th>
                                 <th data-i18n="proxy_status">Status</th>
                                 <th data-i18n="actions">Actions</th>
@@ -371,7 +372,7 @@
                         </thead>
                         <tbody id="proxiesTableBody">
                             <tr>
-                                <td colspan="7" style="text-align: center; padding: 40px;" data-i18n="loading">Loading...</td>
+                                <td colspan="8" style="text-align: center; padding: 40px;" data-i18n="loading">Loading...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -2696,7 +2697,7 @@
                 const tbody = document.getElementById('proxiesTableBody');
 
                 if (proxies.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px;">No proxies configured. Click "Add Proxy" to create one.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 40px;">No proxies configured. Click "Add Proxy" to create one.</td></tr>';
                     return;
                 }
 
@@ -2706,6 +2707,7 @@
                         <td><code>${proxy.domain}</code></td>
                         <td><small>${proxy.fake_snis.join(', ') || '-'}</small></td>
                         <td><span class="badge">${proxy.sni_strategy}</span></td>
+                        <td><span class="badge" style="background: #9b59b6;">${(proxy.allowed_transport || 'xhttp').toUpperCase()}</span></td>
                         <td>${proxy.backends.length} nodes</td>
                         <td>
                             <span class="status ${proxy.enabled ? 'online' : 'offline'}">
@@ -2722,7 +2724,7 @@
             } catch (error) {
                 console.error('Error loading proxies:', error);
                 document.getElementById('proxiesTableBody').innerHTML =
-                    '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #e74c3c;">Error loading proxies</td></tr>';
+                    '<tr><td colspan="8" style="text-align: center; padding: 40px; color: #e74c3c;">Error loading proxies</td></tr>';
             }
         }
 
