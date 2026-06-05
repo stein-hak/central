@@ -368,13 +368,31 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
 
     # Helper function to detect transport type from VLESS URL
     def get_transport_from_url(vless_url):
-        """Extract transport type from VLESS URL parameters"""
-        if 'type=xhttp' in vless_url:
-            return 'xhttp'
-        elif 'type=grpc' in vless_url:
+        """Extract transport type from VLESS URL name (after #)"""
+        # Check the name part (after #) for transport type
+        if '#' in vless_url:
+            name_part = vless_url.split('#')[1]
+            # URL decode the name
+            import urllib.parse
+            decoded_name = urllib.parse.unquote(name_part)
+
+            # Look for transport indicators in the name (case insensitive)
+            name_upper = decoded_name.upper()
+            if '-GRPC-' in name_upper or name_upper.endswith('-GRPC'):
+                return 'grpc'
+            elif '-XHTTP-' in name_upper or name_upper.endswith('-XHTTP'):
+                return 'xhttp'
+            elif '-TCP-' in name_upper or name_upper.endswith('-TCP'):
+                return 'tcp'
+
+        # Fallback to URL parameters if name doesn't contain transport info
+        if 'type=grpc' in vless_url or 'serviceName=' in vless_url:
             return 'grpc'
+        elif 'type=xhttp' in vless_url:
+            return 'xhttp'
         elif 'type=tcp' in vless_url:
             return 'tcp'
+
         # Default to tcp if not specified
         return 'tcp'
 
