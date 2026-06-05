@@ -859,6 +859,24 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label data-i18n="proxy_transport">Allowed Transport</label>
+                    <div style="display: flex; gap: 20px; margin-top: 8px;">
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="allowed_transport" value="xhttp" checked>
+                            <span>XHTTP</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="allowed_transport" value="grpc">
+                            <span>gRPC</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" name="allowed_transport" value="tcp">
+                            <span>TCP</span>
+                        </label>
+                    </div>
+                    <small style="color: #7f8c8d; display: block; margin-top: 5px;">This proxy will only generate URLs for keys of this transport type</small>
+                </div>
+                <div class="form-group">
                     <label>
                         <input type="checkbox" name="enabled" checked> Enabled
                     </label>
@@ -901,6 +919,24 @@
                         <option value="fixed">Fixed (always first)</option>
                         <option value="rotate">Rotate (daily)</option>
                     </select>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="proxy_transport">Allowed Transport</label>
+                    <div style="display: flex; gap: 20px; margin-top: 8px;">
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" id="editProxyTransportXhttp" name="allowed_transport" value="xhttp">
+                            <span>XHTTP</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" id="editProxyTransportGrpc" name="allowed_transport" value="grpc">
+                            <span>gRPC</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="radio" id="editProxyTransportTcp" name="allowed_transport" value="tcp">
+                            <span>TCP</span>
+                        </label>
+                    </div>
+                    <small style="color: #7f8c8d; display: block; margin-top: 5px;">This proxy will only generate URLs for keys of this transport type</small>
                 </div>
                 <div class="form-group">
                     <label>
@@ -2735,6 +2771,17 @@
                 document.getElementById('editProxyDomain').value = proxy.domain;
                 document.getElementById('editProxyFakeSnis').value = proxy.fake_snis.join(', ');
                 document.getElementById('editProxyStrategy').value = proxy.sni_strategy;
+
+                // Set transport radio button
+                const transport = proxy.allowed_transport || 'xhttp';
+                if (transport === 'xhttp') {
+                    document.getElementById('editProxyTransportXhttp').checked = true;
+                } else if (transport === 'grpc') {
+                    document.getElementById('editProxyTransportGrpc').checked = true;
+                } else if (transport === 'tcp') {
+                    document.getElementById('editProxyTransportTcp').checked = true;
+                }
+
                 document.getElementById('editProxyEnabled').checked = proxy.enabled;
                 document.getElementById('editProxyNotes').value = proxy.notes || '';
 

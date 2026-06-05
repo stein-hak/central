@@ -366,6 +366,18 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     # Priority: proxy URLs first, then direct URLs (if not proxy_only)
     all_vless_urls = []
 
+    # Helper function to detect transport type from VLESS URL
+    def get_transport_from_url(vless_url):
+        """Extract transport type from VLESS URL parameters"""
+        if 'type=xhttp' in vless_url:
+            return 'xhttp'
+        elif 'type=grpc' in vless_url:
+            return 'grpc'
+        elif 'type=tcp' in vless_url:
+            return 'tcp'
+        # Default to tcp if not specified
+        return 'tcp'
+
     # First, generate proxy URLs (one per proxy, not per node)
     # Get all enabled proxies with backends
     all_proxies = db.query(Proxy).filter(Proxy.enabled == True).all()
@@ -374,6 +386,9 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
     for proxy in all_proxies:
         if proxy.id in generated_proxy_ids:
             continue
+
+        # Get proxy's allowed transport (default to xhttp for backward compatibility)
+        allowed_transport = proxy.allowed_transport or 'xhttp'
 
         # Get first enabled backend node for this proxy
         backend = db.query(ProxyBackend).join(
@@ -387,15 +402,24 @@ async def get_subscription(client_email: str, request: Request, db: Session = De
         if not backend:
             continue
 
-        # Find a key for this backend node
-        key = next((k for k in keys if k.node_id == backend.node_id), None)
-        if not key:
+        # Find a key for this backend node that matches the proxy's allowed transport
+        matching_key = None
+        for k in keys:
+            if k.node_id == backend.node_id:
+                # Check if key's transport matches proxy's allowed transport
+                key_transport = get_transport_from_url(k.vless_url)
+                if key_transport == allowed_transport:
+                    matching_key = k
+                    break
+
+        if not matching_key:
+            # No matching key found for this proxy's transport type
             continue
 
         # Generate one proxy URL
         fake_sni = select_fake_sni(proxy, backend.node_id)
         proxy_url = regenerate_url_with_proxy(
-            original_url=key.vless_url,
+            original_url=matching_key.vless_url,
             proxy_domain=proxy.domain,
             proxy_name=proxy.name,
             fake_sni=fake_sni

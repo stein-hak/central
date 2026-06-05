@@ -136,6 +136,7 @@ class Proxy(Base):
     domain = Column(String(255), nullable=False)
     fake_snis = Column(ARRAY(Text))  # Array of fake SNI domains
     sni_strategy = Column(String(20), default='random')  # random | fixed | rotate
+    allowed_transport = Column(String(20), default='xhttp')  # xhttp | grpc | tcp - transport filter
     enabled = Column(Boolean, default=True)
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)

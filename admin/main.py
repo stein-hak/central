@@ -4173,6 +4173,7 @@ async def get_proxies(request: Request, db: Session = Depends(get_db)):
             "domain": proxy.domain,
             "fake_snis": proxy.fake_snis or [],
             "sni_strategy": proxy.sni_strategy,
+            "allowed_transport": proxy.allowed_transport or "xhttp",
             "enabled": proxy.enabled,
             "notes": proxy.notes,
             "backends": backend_list,
@@ -4189,6 +4190,7 @@ async def create_proxy(
     domain: str = Form(...),
     fake_snis: str = Form(""),  # Comma-separated list
     sni_strategy: str = Form("random"),
+    allowed_transport: str = Form("xhttp"),  # NEW: xhttp | grpc | tcp
     enabled: bool = Form(True),
     notes: str = Form(""),
     db: Session = Depends(get_db)
@@ -4201,6 +4203,10 @@ async def create_proxy(
     if existing:
         raise HTTPException(status_code=400, detail="Proxy with this name already exists")
 
+    # Validate transport
+    if allowed_transport not in ['xhttp', 'grpc', 'tcp']:
+        raise HTTPException(status_code=400, detail="Invalid transport. Must be xhttp, grpc, or tcp")
+
     # Parse fake SNIs
     fake_snis_list = []
     if fake_snis:
@@ -4212,6 +4218,7 @@ async def create_proxy(
         domain=domain,
         fake_snis=fake_snis_list,
         sni_strategy=sni_strategy,
+        allowed_transport=allowed_transport,
         enabled=enabled,
         notes=notes
     )
@@ -4241,6 +4248,7 @@ async def update_proxy(
     domain: str = Form(...),
     fake_snis: str = Form(""),
     sni_strategy: str = Form("random"),
+    allowed_transport: str = Form("xhttp"),  # NEW: xhttp | grpc | tcp
     enabled: bool = Form(True),
     notes: str = Form(""),
     db: Session = Depends(get_db)
@@ -4260,6 +4268,10 @@ async def update_proxy(
     if existing:
         raise HTTPException(status_code=400, detail="Proxy with this name already exists")
 
+    # Validate transport
+    if allowed_transport not in ['xhttp', 'grpc', 'tcp']:
+        raise HTTPException(status_code=400, detail="Invalid transport. Must be xhttp, grpc, or tcp")
+
     # Parse fake SNIs
     fake_snis_list = []
     if fake_snis:
@@ -4270,6 +4282,7 @@ async def update_proxy(
     proxy.domain = domain
     proxy.fake_snis = fake_snis_list
     proxy.sni_strategy = sni_strategy
+    proxy.allowed_transport = allowed_transport
     proxy.enabled = enabled
     proxy.notes = notes
 
