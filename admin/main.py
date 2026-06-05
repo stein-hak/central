@@ -2730,6 +2730,16 @@ async def recreate_client_on_nodes(
     ).delete()
     db.commit()
 
+    # Delete client from all nodes first (to avoid conflicts)
+    print(f"🗑️  Deleting client '{client.email}' from all nodes...")
+    delete_tasks = []
+    for node in nodes:
+        delete_tasks.append(async_delete_client_from_node(node, client, db))
+    delete_results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+
+    deleted_count = sum(1 for r in delete_results if isinstance(r, dict) and r.get("success", False))
+    print(f"   Deleted from {deleted_count}/{len(nodes)} nodes")
+
     # Recreate keys on ALL VLESS inbounds (no filtering by Reality)
     node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=None)
 
