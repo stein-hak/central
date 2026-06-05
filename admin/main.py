@@ -2689,17 +2689,15 @@ async def add_manual_keys(
 async def recreate_client_on_nodes(
     request: Request,
     client_id: int,
-    reality_only: str = Form(default=None),
     db: Session = Depends(get_db)
 ):
     """
-    Recreate client on ALL nodes (fixes broken flow settings)
+    Recreate client on ALL nodes and ALL VLESS inbounds
     - Deletes client from all inbounds on all nodes (gRPC, XHTTP, etc.)
-    - Recreates client with same UUID on all nodes
+    - Recreates client with same UUID on all nodes and inbounds
 
     Args:
         client_id: Client ID to recreate
-        reality_only: If specified, override inbound type. If None (default), auto-detect from existing keys
     """
     check_auth(request)
 
