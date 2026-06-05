@@ -604,7 +604,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                 result["errors"].append(f"Failed to sync to inbound {inbound_id}")
                 continue
 
-            # Check Reality filter
+            # Parse stream settings for transport detection
             try:
                 stream_settings_raw = inbound.get("streamSettings", "{}")
                 # streamSettings can be either string or dict depending on API version
@@ -612,24 +612,11 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
                     stream_settings = json.loads(stream_settings_raw)
                 else:
                     stream_settings = stream_settings_raw
-
-                is_reality = stream_settings.get("security") == "reality"
-                print(f"    DEBUG: Inbound {inbound_id} is_reality={is_reality}, reality_only={reality_only}")
-
-                # Skip if doesn't match reality_only filter
-                if reality_only and not is_reality:
-                    print(f"    DEBUG: Skipping inbound {inbound_id} - reality_only=True but is_reality=False")
-                    continue
-                if not reality_only and is_reality:
-                    print(f"    DEBUG: Skipping inbound {inbound_id} - reality_only=False but is_reality=True")
-                    continue
             except Exception as e:
-                # If can't parse, treat as non-Reality
                 print(f"    DEBUG: Failed to parse streamSettings for inbound {inbound_id}: {e}")
-                if reality_only:
-                    continue
+                stream_settings = {}
 
-            # Use already parsed stream_settings as stream_settings_dict
+            # Use parsed stream_settings
             stream_settings_dict = stream_settings
 
             # Determine transport type from stream settings or remark
@@ -2738,20 +2725,6 @@ async def recreate_client_on_nodes(
         # Generate new UUID if no keys exist
         client_uuid = str(uuid.uuid4())
 
-    # Convert reality_only from string to bool (FormData sends "true"/"false" strings)
-    reality_only_bool = None
-    if reality_only is not None:
-        reality_only_bool = reality_only.lower() in ('true', '1', 'yes')
-
-    # Auto-detect reality_only from existing keys if not specified
-    if reality_only_bool is None:
-        # Check if existing keys have Reality (security=reality in URL)
-        if existing_key and existing_key.vless_url:
-            reality_only_bool = "security=reality" in existing_key.vless_url
-        else:
-            # Default to Reality if no existing keys
-            reality_only_bool = True
-
     # Delete all existing auto-generated keys for this client
     db.query(Key).filter(
         Key.client_id == client_id,
@@ -2759,8 +2732,8 @@ async def recreate_client_on_nodes(
     ).delete()
     db.commit()
 
-    # Recreate keys on ALL nodes using async parallel method
-    node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=reality_only_bool)
+    # Recreate keys on ALL VLESS inbounds (no filtering by Reality)
+    node_results = await async_create_keys_on_all_nodes(nodes, client.email, db, reality_only=None)
 
     # Save keys to database
     for result in node_results:
