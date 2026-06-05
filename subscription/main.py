@@ -140,8 +140,8 @@ def regenerate_url_with_proxy(original_url: str, proxy_domain: str, proxy_name: 
             if len(parts) >= 3:
                 email = '-'.join(parts[2:])  # Everything after transport
 
-        # Build new remark with proxy name
-        new_remark = f"{proxy_name}-{transport}"
+        # Build new remark with proxy name (transport already in proxy_name)
+        new_remark = proxy_name
         if email:
             new_remark += f"-{email}"
 
