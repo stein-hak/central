@@ -539,7 +539,7 @@ async def async_create_keys_on_node(node: Node, client_email: str, client_uuid: 
     Returns: dict with node info, success status, keys created, and any errors
     """
     start_time = time.time()
-    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    filter_msg = " (Reality-only)" if reality_only is True else " (Legacy non-Reality)" if reality_only is False else " (all VLESS inbounds)"
     print(f"  ⏱️  [{node.name}] Starting key creation{filter_msg}...")
 
     result = {
@@ -671,7 +671,7 @@ async def async_create_keys_on_all_nodes(nodes: List[Node], client_email: str, d
 
     # Generate ONE UUID for this client (shared across all nodes and inbounds)
     client_uuid = str(uuid.uuid4())
-    filter_msg = " (Reality-only)" if reality_only else " (Legacy non-Reality)"
+    filter_msg = " (Reality-only)" if reality_only is True else " (Legacy non-Reality)" if reality_only is False else " (all VLESS inbounds)"
     print(f"\n🚀 Creating keys for '{client_email}' (UUID: {client_uuid[:8]}...) on {len(nodes)} nodes IN PARALLEL{filter_msg}...")
 
     tasks = [async_create_keys_on_node(node, client_email, client_uuid, db, reality_only) for node in nodes]
