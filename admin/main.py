@@ -2769,7 +2769,6 @@ async def recreate_client_on_nodes(
     return {
         "client_email": client.email,
         "client_uuid": client_uuid,
-        "reality_only": reality_only,
         "total_nodes": len(results),
         "success_count": success_count,
         "results": results
