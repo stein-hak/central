@@ -83,6 +83,7 @@ class Proxy(Base):
     domain = Column(String(255))
     fake_snis = Column(ARRAY(Text))
     sni_strategy = Column(String(20))
+    allowed_transport = Column(String(20))
     enabled = Column(Boolean)
 
     proxy_backends = relationship("ProxyBackend", back_populates="proxy")
