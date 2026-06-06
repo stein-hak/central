@@ -4286,6 +4286,23 @@ async def delete_proxy(request: Request, proxy_id: int, db: Session = Depends(ge
     return {"success": True}
 
 
+@app.post("/api/proxies/{proxy_id}/toggle")
+async def toggle_proxy(request: Request, proxy_id: int, db: Session = Depends(get_db)):
+    """Toggle proxy enabled/disabled status"""
+    check_auth(request)
+
+    proxy = db.query(Proxy).filter(Proxy.id == proxy_id).first()
+    if not proxy:
+        raise HTTPException(status_code=404, detail="Proxy not found")
+
+    # Toggle the enabled status
+    proxy.enabled = not proxy.enabled
+    db.commit()
+    db.refresh(proxy)
+
+    return {"id": proxy.id, "name": proxy.name, "enabled": proxy.enabled}
+
+
 @app.get("/api/proxies/{proxy_id}/backends")
 async def get_proxy_backends(request: Request, proxy_id: int, db: Session = Depends(get_db)):
     """Get backend nodes for a proxy"""

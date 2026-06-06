@@ -2691,6 +2691,7 @@
                             </span>
                         </td>
                         <td>
+                            <button class="btn btn-sm ${proxy.enabled ? 'btn-warning' : 'btn-success'}" onclick="toggleProxy(${proxy.id}, '${proxy.name}', ${proxy.enabled})" style="margin-right: 5px;">${proxy.enabled ? 'Disable' : 'Enable'}</button>
                             <button class="btn btn-sm" onclick="editProxy(${proxy.id})" style="background: #3498db;">Edit</button>
                             <button class="btn btn-sm" onclick="manageBackends(${proxy.id}, '${proxy.name}')" style="background: #9b59b6;">Backends</button>
                             <button class="btn btn-sm btn-danger" onclick="deleteProxy(${proxy.id}, '${proxy.name}')">Delete</button>
@@ -2887,6 +2888,23 @@
                 alert('Backend removed successfully');
             } catch (error) {
                 alert('Error deleting backend: ' + error.message);
+            }
+        }
+
+        async function toggleProxy(id, name, currentlyEnabled) {
+            const action = currentlyEnabled ? 'Disable' : 'Enable';
+            if (!confirm(`${action} proxy "${name}"?`)) return;
+
+            try {
+                const response = await fetch(`/api/proxies/${id}/toggle`, { method: 'POST' });
+                if (!response.ok) throw new Error('Failed to toggle proxy');
+
+                const data = await response.json();
+                await loadProxies();
+                const status = data.enabled ? 'Enabled' : 'Disabled';
+                alert(`Proxy "${name}" is now ${status}`);
+            } catch (error) {
+                alert('Failed to toggle proxy');
             }
         }
 
